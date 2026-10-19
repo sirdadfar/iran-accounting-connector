@@ -1,0 +1,36 @@
+{
+    "number": "INV-1403-0042",
+    "external_id": "wc-order-1042",
+    "issued_at": "2026-10-18T10:30:00+03:30",
+    "currency": "IRR",
+    "customer": {
+        "code": "CUST-1042",
+        "name": "شرکت نمونه پارس",
+        "national_id": "0012345679",
+        "mobile": "09121234567",
+        "address": "تهران، خیابان نمونه، پلاک ۱۲",
+        "economic_code": "411234567890"
+    },
+    "lines": [
+        {
+            "sku": "SKU-100",
+            "name": "ماوس بی‌سیم",
+            "quantity": 2,
+            "unit_price": 1250000,
+            "discount": 0,
+            "tax_rate_bp": 900
+        },
+        {
+            "sku": "SKU-200",
+            "name": "کیبورد مکانیکی",
+            "quantity": 1,
+            "unit_price": 3400000,
+            "discount": 100000,
+            "tax_rate_bp": 900
+        }
+    ],
+    "tax": 522000,
+    "discount": 0,
+    "total": 6322000,
+    "notes": "سفارش نمونه ووکامرس"
+}

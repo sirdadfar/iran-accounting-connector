@@ -1,0 +1,54 @@
+{
+    "name": "sirdadfar/iran-accounting-connector",
+    "description": "Framework for pushing shop invoices, payments and customers into Iranian accounting software with mapping, idempotency, retries and dry-run support.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "iran",
+        "accounting",
+        "mahak",
+        "holoo",
+        "sepidar",
+        "woocommerce",
+        "invoice",
+        "idempotency"
+    ],
+    "authors": [
+        {
+            "name": "sirdadfar"
+        }
+    ],
+    "require": {
+        "php": ">=8.1",
+        "ext-json": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.5"
+    },
+    "suggest": {
+        "ext-curl": "Required by Http\\CurlClient (the default HTTP transport).",
+        "ext-pdo": "Required by Idempotency\\PdoIdempotencyStore.",
+        "ext-pdo_sqlite": "Useful for a single-file durable idempotency store.",
+        "ext-pdo_mysql": "Useful when the idempotency store lives in MySQL."
+    },
+    "autoload": {
+        "psr-4": {
+            "IranAccounting\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "IranAccounting\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "demo": "php bin/sync-demo.php"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {}
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
