@@ -117,6 +117,10 @@ $payload = $mapper->map($invoice->toArray());
   `__FILL_...__` دارند؛ تا پر نشوند سازنده اجازه‌ی اجرا نمی‌دهد.
 * پروفایل هر مشتری را در **فایل پیکربندی همان پروژه** نگه دارید (نه در کد کتابخانه) و کنار نسخه‌ی
   نرم‌افزار حسابداری، آن را نسخه‌بندی کنید.
+* مسیر مطلق اندپوینت فقط وقتی پذیرفته می‌شود که scheme/host/port آن با `base_uri` یکی باشد. برای مقصد
+  دیگر، اتصال‌دهنده‌ی جدا بسازید؛ این محدودیت عمدی است تا پیکربندی به مسیر SSRF تبدیل نشود.
+* مقادیر `query` را **رمزگذاری‌نشده** بنویسید؛ کتابخانه آن‌ها را دقیقاً یک‌بار با
+  `PHP_QUERY_RFC3986` کد می‌کند.
 
 ---
 
@@ -124,6 +128,7 @@ $payload = $mapper->map($invoice->toArray());
 
 ```php
 use IranAccounting\Domain\Money;
+use IranAccounting\Support\JalaliDate;
 
 $mapLines = static function (array $lines): array {
     return array_map(static fn (array $line): array => [
@@ -136,17 +141,23 @@ $mapLines = static function (array $lines): array {
     ], $lines);
 };
 
+// تاریخ شمسی بدون وابستگی اضافه؛ ارقام لاتین و جداکننده‌ی «/».
+$docDate = static fn (string $iso): string => JalaliDate::format(new DateTimeImmutable($iso), '/');
+
 return [
     'invoice' => [
         'number'          => 'DocNo',
         'external_id'     => 'ExternalRef',
-        'issued_at'       => ['target' => 'DocDate', 'transform' => $toJalaliOrGregorian],
+        'issued_at'       => ['target' => 'DocDate', 'transform' => $docDate],
         'customer.code'   => 'PartnerCode',
         'lines'           => ['target' => 'Rows', 'required' => true, 'transform' => $mapLines],
         'total'           => 'Amount',
     ],
 ];
 ```
+
+اگر مقصد ارقام فارسی می‌خواهد: `JalaliDate::format($date, '/', true)`. این helper تقویم را تبدیل می‌کند،
+نه قالب اختصاصی مقصد را؛ قالب را با مستندات همان نسخه تطبیق دهید.
 
 ---
 

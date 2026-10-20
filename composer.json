@@ -42,8 +42,13 @@
         }
     },
     "scripts": {
-        "test": "phpunit",
-        "demo": "php bin/sync-demo.php"
+        "test": "phpunit --colors=never",
+        "demo": "php bin/sync-demo.php",
+        "audit": "composer audit"
+    },
+    "support": {
+        "issues": "https://github.com/sirdadfar/iran-accounting-connector/issues",
+        "source": "https://github.com/sirdadfar/iran-accounting-connector"
     },
     "config": {
         "sort-packages": true,

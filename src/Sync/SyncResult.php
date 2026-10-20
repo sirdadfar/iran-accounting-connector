@@ -73,4 +73,18 @@ final class SyncResult
             'payload' => $this->payload,
         ];
     }
+
+    /**
+     * Same metadata as toArray() but without the mapped payload. Use this for
+     * application logs: the payload may contain customer PII and amounts.
+     *
+     * @return array<string, mixed>
+     */
+    public function toLogArray(): array
+    {
+        $array = $this->toArray();
+        unset($array['payload']);
+
+        return $array;
+    }
 }

@@ -100,7 +100,9 @@ final class Money
      */
     public function format(bool $withUnit = true, bool $persianDigits = false): string
     {
-        $formatted = number_format($this->amount, 0, '.', '٬');
+        // Format the integer directly. number_format() takes a float and would
+        // lose precision above 2^53, which is still a valid 64-bit Rial value.
+        $formatted = self::groupDigits($this->amount);
 
         if ($persianDigits) {
             $formatted = strtr($formatted, [
@@ -114,7 +116,7 @@ final class Money
 
     public function formatToman(bool $withUnit = true): string
     {
-        $formatted = number_format($this->toToman(), 0, '.', '٬');
+        $formatted = self::groupDigits($this->toToman());
 
         return $withUnit ? $formatted . ' تومان' : $formatted;
     }
@@ -131,5 +133,25 @@ final class Money
         }
 
         return $value;
+    }
+
+    /**
+     * Groups an integer with the Persian thousands separator without converting
+     * it to a float.
+     */
+    private static function groupDigits(int $amount): string
+    {
+        $sign = $amount < 0 ? '-' : '';
+        $digits = ltrim((string) $amount, '-');
+        $groups = [];
+
+        while (strlen($digits) > 3) {
+            array_unshift($groups, substr($digits, -3));
+            $digits = substr($digits, 0, -3);
+        }
+
+        array_unshift($groups, $digits);
+
+        return $sign . implode('٬', $groups);
     }
 }

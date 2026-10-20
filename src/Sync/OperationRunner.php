@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace IranAccounting\Sync;
 
+use IranAccounting\Capabilities;
 use IranAccounting\ConnectorInterface;
 use IranAccounting\Exception\ConnectorException;
 use IranAccounting\Exception\HttpException;
@@ -18,9 +19,11 @@ use IranAccounting\Retry\Sleeper;
 use IranAccounting\Retry\SystemSleeper;
 use IranAccounting\Support\Clock;
 use IranAccounting\Support\Json;
+use IranAccounting\Support\Redactor;
 use IranAccounting\Support\SystemClock;
 use IranAccounting\Validation\ErrorCodes;
 use IranAccounting\Validation\ValidationError;
+use InvalidArgumentException;
 use JsonException;
 use Throwable;
 
@@ -44,6 +47,10 @@ final class OperationRunner
         ?Clock $clock = null,
         private readonly int $lockTtlSeconds = 300,
     ) {
+        if ($lockTtlSeconds < 1) {
+            throw new InvalidArgumentException('lockTtlSeconds must be at least one second.');
+        }
+
         $this->clock = $clock ?? new SystemClock();
     }
 
@@ -59,6 +66,11 @@ final class OperationRunner
         bool $dryRun = false,
     ): SyncResult {
         $key = IdempotencyKey::build($this->connector->name(), $operation, $externalId);
+
+        // A non-idempotent POST must never be replayed blindly: the remote may
+        // have committed the first attempt even though the response was lost.
+        $retryBudget = $this->retryBudget();
+        $retryWarnings = $retryBudget === null ? [] : [$this->retryUnsafeWarning()];
 
         try {
             $payloadHash = hash('sha256', Json::encode($payload));
@@ -218,6 +230,7 @@ final class OperationRunner
                     return $receipt;
                 },
                 $this->sleeper,
+                $retryBudget,
             );
         } catch (Throwable $exception) {
             $attempts = $exception instanceof RetryExhaustedException ? $exception->attempts : 1;
@@ -234,7 +247,8 @@ final class OperationRunner
                     $error->code,
                     $error->field,
                     $error->messageFa,
-                    $error->messageEn . ' (Additionally, the local idempotency failure could not be recorded: ' . $storeException->getMessage() . ')',
+                    $error->messageEn . ' (Additionally, the local idempotency failure could not be recorded: '
+                        . Redactor::secrets($storeException->getMessage()) . ')',
                     $error->context,
                 );
             }
@@ -246,7 +260,7 @@ final class OperationRunner
                 null,
                 $attempts,
                 [$error],
-                [],
+                $retryWarnings,
                 'Push failed; the idempotency record was marked failed and can be retried.',
                 $payload,
                 $delays,
@@ -273,6 +287,7 @@ final class OperationRunner
                 $payload,
                 $outcome->attempts,
                 $outcome->delaysMs,
+                $retryWarnings,
             );
         }
 
@@ -286,13 +301,15 @@ final class OperationRunner
                 $receipt->remoteId,
                 $outcome->attempts,
                 [$this->storeFailure($exception)],
-                [new ValidationError(
-                    ErrorCodes::STORE_FAILURE,
-                    'idempotency',
-                    'سند در سیستم مقصد ثبت شد اما وضعیت محلی ذخیره نشد؛ پیش از تلاش دوباره، سند را در مقصد بررسی کنید.',
-                    'The remote push succeeded but the local idempotency state could not be saved. Reconcile manually before retrying.',
-                    ['remote_id' => $receipt->remoteId],
-                )],
+                array_merge([
+                    new ValidationError(
+                        ErrorCodes::STORE_FAILURE,
+                        'idempotency',
+                        'سند در سیستم مقصد ثبت شد اما وضعیت محلی ذخیره نشد؛ پیش از تلاش دوباره، سند را در مقصد بررسی کنید.',
+                        'The remote push succeeded but the local idempotency state could not be saved. Reconcile manually before retrying.',
+                        ['remote_id' => $receipt->remoteId],
+                    ),
+                ], $retryWarnings),
                 'Remote success could not be recorded locally.',
                 $payload,
                 $outcome->delaysMs,
@@ -318,9 +335,10 @@ final class OperationRunner
         $cause = $exception instanceof RetryExhaustedException ? $exception->lastFailure : $exception;
         $code = $cause instanceof ConnectorException ? $cause->errorCode : ErrorCodes::SYNC_UNEXPECTED;
         $description = ErrorCodes::describe($code);
+        $detail = Redactor::secrets($cause->getMessage());
         $context = [
             'exception' => $cause::class,
-            'detail' => $cause->getMessage(),
+            'detail' => $detail,
         ];
 
         if ($cause instanceof HttpException) {
@@ -332,7 +350,7 @@ final class OperationRunner
             $code,
             $this->fieldFor($code),
             $description['fa'],
-            $description['en'] . ' ' . $cause->getMessage(),
+            $description['en'] . ' ' . $detail,
             $context,
         );
     }
@@ -343,8 +361,34 @@ final class OperationRunner
             ErrorCodes::STORE_FAILURE,
             'idempotency',
             'دسترسی به مخزن جلوگیری از تکرار ممکن نشد؛ برای جلوگیری از ثبت دوباره، ارسال انجام نشد.',
-            'The idempotency store is unavailable; the push was skipped (fail closed) to avoid duplicates. ' . $exception->getMessage(),
+            'The idempotency store is unavailable; the push was skipped (fail closed) to avoid duplicates. '
+            . Redactor::secrets($exception->getMessage()),
             ['exception' => $exception::class],
+        );
+    }
+
+    /**
+     * Returns 1 when retries must be suppressed for this connector, null when
+     * the configured budget is safe.
+     */
+    private function retryBudget(): ?int
+    {
+        $capabilities = $this->connector->capabilities();
+
+        if (($capabilities[Capabilities::IDEMPOTENCY_HEADER] ?? false) === true) {
+            return null;
+        }
+
+        return $this->retryPolicy->maxAttempts() > 1 ? 1 : null;
+    }
+
+    private function retryUnsafeWarning(): ValidationError
+    {
+        return new ValidationError(
+            ErrorCodes::SYNC_RETRY_UNSAFE,
+            'idempotency',
+            'اتصال‌دهنده کلید جلوگیری از تکرار نمی‌فرستد؛ برای جلوگیری از ثبت دوباره، تلاش مجدد غیرفعال شد.',
+            'The adapter does not send an idempotency key; automatic retries were disabled to avoid duplicate documents.',
         );
     }
 
@@ -361,6 +405,7 @@ final class OperationRunner
     /**
      * @param array<string, mixed> $payload
      * @param list<int> $delays
+     * @param list<ValidationError> $warnings
      */
     private function failureResult(
         string $operation,
@@ -369,6 +414,7 @@ final class OperationRunner
         array $payload,
         int $attempts = 0,
         array $delays = [],
+        array $warnings = [],
     ): SyncResult {
         return new SyncResult(
             SyncStatus::Failed,
@@ -377,7 +423,7 @@ final class OperationRunner
             null,
             $attempts,
             [$failure instanceof ValidationError ? $failure : $this->errorFrom($failure)],
-            [],
+            $warnings,
             'Synchronization failed before the remote call could be confirmed.',
             $payload,
             $delays,

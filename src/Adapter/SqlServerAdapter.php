@@ -13,6 +13,7 @@ use IranAccounting\Exception\UnsupportedOperationException;
 use IranAccounting\Http\HealthStatus;
 use IranAccounting\Http\PushReceipt;
 use IranAccounting\Http\RemoteInvoice;
+use IranAccounting\Support\Redactor;
 use IranAccounting\Validation\ErrorCodes;
 use PDO;
 use Throwable;
@@ -75,7 +76,7 @@ final class SqlServerAdapter implements ConnectorInterface
 
             return HealthStatus::healthy('PDO connection is alive (schema is not verified).');
         } catch (Throwable $exception) {
-            return HealthStatus::failed('PDO health check failed: ' . $exception->getMessage());
+            return HealthStatus::failed('PDO health check failed: ' . Redactor::secrets($exception->getMessage()));
         }
     }
 

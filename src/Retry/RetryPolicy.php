@@ -7,6 +7,7 @@ namespace IranAccounting\Retry;
 use Closure;
 use IranAccounting\Exception\RetryExhaustedException;
 use IranAccounting\Exception\TransientFailure;
+use IranAccounting\Exception\TransientHttpException;
 use InvalidArgumentException;
 use Throwable;
 
@@ -99,9 +100,19 @@ final class RetryPolicy
      * Runs the operation until it succeeds, a non-transient failure occurs, or
      * the attempt budget is exhausted. The final failure is wrapped in
      * RetryExhaustedException so the caller still learns the attempt count.
+     *
+     * @param int|null $maxAttempts Overrides the configured budget for this call
+     *                              (used to disable retries for non-idempotent
+     *                              operations). Null keeps the configured value.
      */
-    public function execute(callable $operation, Sleeper $sleeper): RetryOutcome
+    public function execute(callable $operation, Sleeper $sleeper, ?int $maxAttempts = null): RetryOutcome
     {
+        $budget = $maxAttempts ?? $this->maxAttempts;
+
+        if ($budget < 1) {
+            throw new InvalidArgumentException('Retry budget must be at least 1.');
+        }
+
         $attempts = 0;
         $delays = [];
 
@@ -111,11 +122,24 @@ final class RetryPolicy
             try {
                 return new RetryOutcome($operation(), $attempts, $delays);
             } catch (Throwable $failure) {
-                if (!$this->shouldRetry($failure) || $attempts >= $this->maxAttempts) {
+                if (!$this->shouldRetry($failure) || $attempts >= $budget) {
                     throw new RetryExhaustedException($failure, $attempts, $delays);
                 }
 
                 $delay = $this->delayForAttempt($attempts);
+
+                if ($failure instanceof TransientHttpException && $failure->retryAfterSeconds !== null) {
+                    $retryAfterMs = $failure->retryAfterSeconds * 1_000;
+
+                    // Never retry earlier than the server asked. If that is
+                    // beyond our cap, stop instead of hammering it.
+                    if ($retryAfterMs > $this->maxDelayMs) {
+                        throw new RetryExhaustedException($failure, $attempts, $delays);
+                    }
+
+                    $delay = max($delay, $retryAfterMs);
+                }
+
                 $delays[] = $delay;
                 $sleeper->sleep($delay);
             }

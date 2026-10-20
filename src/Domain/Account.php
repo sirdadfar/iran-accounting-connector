@@ -4,15 +4,6 @@ declare(strict_types=1);
 
 namespace IranAccounting\Domain;
 
-enum AccountType: string
-{
-    case Asset = 'asset';
-    case Liability = 'liability';
-    case Equity = 'equity';
-    case Income = 'income';
-    case Expense = 'expense';
-}
-
 final class Account
 {
     public function __construct(

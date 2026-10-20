@@ -41,7 +41,13 @@ final class InvoiceLine
      */
     public function tax(): Money
     {
-        return Money::fromRial(self::roundDiv($this->net()->amount() * $this->taxRateBasisPoints, 10_000));
+        $product = $this->net()->amount() * $this->taxRateBasisPoints;
+
+        if (!is_int($product)) {
+            throw new \OverflowException('Line tax calculation overflowed the 64-bit integer range.');
+        }
+
+        return Money::fromRial(self::roundDiv($product, 10_000));
     }
 
     public function total(): Money
@@ -70,10 +76,24 @@ final class InvoiceLine
 
     private static function roundDiv(int $numerator, int $denominator): int
     {
+        $half = intdiv($denominator, 2);
+
         if ($numerator >= 0) {
-            return intdiv($numerator + intdiv($denominator, 2), $denominator);
+            if ($numerator > PHP_INT_MAX - $half) {
+                throw new \OverflowException('Tax rounding overflowed the 64-bit integer range.');
+            }
+
+            return intdiv($numerator + $half, $denominator);
         }
 
-        return -intdiv(-$numerator + intdiv($denominator, 2), $denominator);
+        if ($numerator === PHP_INT_MIN) {
+            throw new \OverflowException('Tax rounding overflowed the 64-bit integer range.');
+        }
+
+        if (-$numerator > PHP_INT_MAX - $half) {
+            throw new \OverflowException('Tax rounding overflowed the 64-bit integer range.');
+        }
+
+        return -intdiv(-$numerator + $half, $denominator);
     }
 }

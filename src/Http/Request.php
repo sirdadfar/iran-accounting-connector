@@ -9,6 +9,8 @@ use InvalidArgumentException;
 
 final class Request
 {
+    private const HEADER_NAME_PATTERN = "/^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$/";
+
     /**
      * @param array<string, string> $headers
      */
@@ -19,13 +21,35 @@ final class Request
         public readonly ?string $body = null,
         public readonly float $timeoutSeconds = 10.0,
     ) {
-        if (trim($method) === '') {
-            throw new InvalidArgumentException('HTTP method cannot be empty.');
+        $method = trim($method);
+
+        if ($method === '' || preg_match('/^[A-Za-z]+$/', $method) !== 1) {
+            throw new InvalidArgumentException('HTTP method must be a non-empty alphabetic token.');
         }
 
-        if ($url === '') {
-            throw new InvalidArgumentException('HTTP URL cannot be empty.');
+        $parts = parse_url($url);
+
+        if (!is_array($parts) || !isset($parts['scheme'], $parts['host'])) {
+            throw new InvalidArgumentException('HTTP URL must be absolute and contain a scheme and host.');
         }
+
+        $scheme = strtolower($parts['scheme']);
+
+        if (!in_array($scheme, ['http', 'https'], true)) {
+            throw new InvalidArgumentException('HTTP URL scheme must be http or https.');
+        }
+
+        if (isset($parts['user']) || isset($parts['pass'])) {
+            throw new InvalidArgumentException(
+                'HTTP URL must not embed credentials; send them in an Authorization header from configuration.',
+            );
+        }
+
+        if (!is_finite($timeoutSeconds) || $timeoutSeconds <= 0.0) {
+            throw new InvalidArgumentException('HTTP timeout must be a finite number greater than zero.');
+        }
+
+        $this->assertHeaders($headers);
     }
 
     /**
@@ -65,6 +89,26 @@ final class Request
     public function hasHeader(string $name): bool
     {
         return $this->header($name) !== null;
+    }
+
+    /**
+     * @param array<string, mixed> $headers
+     */
+    private function assertHeaders(array $headers): void
+    {
+        foreach ($headers as $name => $value) {
+            if (!is_string($name) || preg_match(self::HEADER_NAME_PATTERN, $name) !== 1) {
+                throw new InvalidArgumentException('HTTP header names must be non-empty RFC 7230 tokens.');
+            }
+
+            if (!is_string($value)) {
+                throw new InvalidArgumentException(sprintf('HTTP header "%s" must have a string value.', $name));
+            }
+
+            if (preg_match('/[\r\n\0]/', $value) === 1) {
+                throw new InvalidArgumentException(sprintf('HTTP header "%s" must not contain CR, LF or NUL.', $name));
+            }
+        }
     }
 
     /**

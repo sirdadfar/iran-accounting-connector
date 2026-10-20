@@ -22,6 +22,7 @@ use IranAccounting\Http\Response;
 use IranAccounting\Mapping\FieldMapper;
 use IranAccounting\PayloadProvider;
 use IranAccounting\Support\DotPath;
+use IranAccounting\Support\Redactor;
 use IranAccounting\Validation\ErrorCodes;
 use Throwable;
 
@@ -37,7 +38,13 @@ use Throwable;
  */
 class GenericWebserviceAdapter implements ConnectorInterface, PayloadProvider
 {
+    private const HEADER_NAME_PATTERN = "/^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$/";
+
     private readonly string $baseUri;
+
+    /** @var array{0: string, 1: string, 2: int} */
+    private readonly array $baseOrigin;
+
     private readonly string $name;
 
     /** @var array<string, array<string, mixed>> */
@@ -76,13 +83,42 @@ class GenericWebserviceAdapter implements ConnectorInterface, PayloadProvider
             );
         }
 
+        $baseParts = parse_url($baseUri);
+        if (is_array($baseParts) && (isset($baseParts['user']) || isset($baseParts['pass']))) {
+            throw new ConfigurationException(
+                'base_uri must not embed credentials; keep them in headers sourced from the environment.',
+                ErrorCodes::CONFIG_BASE_URI_INVALID,
+            );
+        }
+
+        if (is_array($baseParts) && (isset($baseParts['query']) || isset($baseParts['fragment']))) {
+            throw new ConfigurationException(
+                'base_uri must not contain a query string or fragment; use the endpoint "query" option instead.',
+                ErrorCodes::CONFIG_BASE_URI_INVALID,
+            );
+        }
+
+        $baseOrigin = self::originOf($baseUri);
+        if ($baseOrigin === null) {
+            throw new ConfigurationException(
+                'Adapter configuration requires an absolute http(s) base_uri.',
+                ErrorCodes::CONFIG_BASE_URI_INVALID,
+            );
+        }
+
         $this->baseUri = rtrim($baseUri, '/');
-        $this->name = (string) ($config['name'] ?? 'generic-webservice');
+        $this->baseOrigin = $baseOrigin;
+        $this->name = trim((string) ($config['name'] ?? 'generic-webservice'));
+
+        if ($this->name === '') {
+            throw new ConfigurationException('Adapter name must not be empty; it is part of the idempotency key.', ErrorCodes::CONFIG_INVALID);
+        }
+
         $this->headers = $this->normalizeHeaders($config['headers'] ?? []);
         $this->timeoutSeconds = (float) ($config['timeout'] ?? 10.0);
 
-        if ($this->timeoutSeconds <= 0.0) {
-            throw new ConfigurationException('Adapter timeout must be greater than zero.', ErrorCodes::CONFIG_INVALID);
+        if (!is_finite($this->timeoutSeconds) || $this->timeoutSeconds <= 0.0) {
+            throw new ConfigurationException('Adapter timeout must be a finite number greater than zero.', ErrorCodes::CONFIG_INVALID);
         }
 
         $this->endpoints = $this->normalizeEndpoints($config['endpoints'] ?? []);
@@ -96,7 +132,23 @@ class GenericWebserviceAdapter implements ConnectorInterface, PayloadProvider
 
         $header = $config['idempotency_header'] ?? 'Idempotency-Key';
         $this->idempotencyHeader = is_string($header) && trim($header) !== '' ? trim($header) : null;
+
+        if ($this->idempotencyHeader !== null && preg_match(self::HEADER_NAME_PATTERN, $this->idempotencyHeader) !== 1) {
+            throw new ConfigurationException(
+                'idempotency_header must be a valid HTTP header name.',
+                ErrorCodes::CONFIG_INVALID,
+            );
+        }
+
         $this->idempotencyPrefix = (string) ($config['idempotency_key_prefix'] ?? 'iac');
+
+        if ($this->idempotencyPrefix === '' || preg_match('/[\r\n\0]/', $this->idempotencyPrefix) === 1) {
+            throw new ConfigurationException(
+                'idempotency_key_prefix must be a non-empty value without CR/LF.',
+                ErrorCodes::CONFIG_INVALID,
+            );
+        }
+
         $this->successCodes = $this->normalizeCodes($config['success_codes'] ?? [200, 201, 202, 204]);
         $this->duplicateCodes = $this->normalizeCodes($config['duplicate_codes'] ?? []);
 
@@ -290,7 +342,10 @@ class GenericWebserviceAdapter implements ConnectorInterface, PayloadProvider
         } catch (Throwable $exception) {
             $latency = intdiv(hrtime(true) - $started, 1_000_000);
 
-            return HealthStatus::failed('Health check failed: ' . $exception->getMessage(), $latency);
+            return HealthStatus::failed(
+                'Health check failed: ' . Redactor::secrets($exception->getMessage()),
+                $latency,
+            );
         }
 
         $latency = intdiv(hrtime(true) - $started, 1_000_000);
@@ -350,11 +405,11 @@ class GenericWebserviceAdapter implements ConnectorInterface, PayloadProvider
         $headers = $this->mergeHeaders($this->headers, $endpoint['headers']);
 
         if ($this->idempotencyHeader !== null) {
-            $headers[$this->idempotencyHeader] = sprintf(
+            $headers = $this->withHeader($headers, $this->idempotencyHeader, sprintf(
                 '%s-%s',
                 $this->idempotencyPrefix,
                 hash('sha256', $operation . '|' . $fallbackRemoteId),
-            );
+            ));
         }
 
         $request = Request::json(
@@ -487,6 +542,13 @@ class GenericWebserviceAdapter implements ConnectorInterface, PayloadProvider
                 );
             }
 
+            if (preg_match('/[\x00-\x1F\x7F]/', $path) === 1) {
+                throw new ConfigurationException(
+                    sprintf('Endpoint "%s" path must not contain control characters.', $name),
+                    ErrorCodes::CONFIG_INVALID,
+                );
+            }
+
             $method = strtoupper((string) ($spec['method'] ?? 'POST'));
             if (!in_array($method, ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], true)) {
                 throw new ConfigurationException(sprintf('Unsupported HTTP method "%s" for endpoint "%s".', $method, $name), ErrorCodes::CONFIG_INVALID);
@@ -509,14 +571,28 @@ class GenericWebserviceAdapter implements ConnectorInterface, PayloadProvider
                 throw new ConfigurationException(sprintf('query for endpoint "%s" must be an array.', $name), ErrorCodes::CONFIG_INVALID);
             }
 
+            $paths = [];
+            foreach (['number_path' => 'number', 'status_path' => 'status'] as $key => $default) {
+                $value = $spec[$key] ?? $default;
+
+                if (!is_string($value) || trim($value) === '' || preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
+                    throw new ConfigurationException(
+                        sprintf('%s for endpoint "%s" must be a non-empty string without control characters.', $key, $name),
+                        ErrorCodes::CONFIG_INVALID,
+                    );
+                }
+
+                $paths[$key] = $value;
+            }
+
             $normalized[$name] = [
                 'method' => $method,
                 'path' => $path,
                 'id_path' => $idPath,
                 'query' => $query,
                 'headers' => $this->normalizeHeaders($spec['headers'] ?? []),
-                'number_path' => $spec['number_path'] ?? 'number',
-                'status_path' => $spec['status_path'] ?? 'status',
+                'number_path' => $paths['number_path'],
+                'status_path' => $paths['status_path'],
             ];
         }
 
@@ -616,6 +692,27 @@ class GenericWebserviceAdapter implements ConnectorInterface, PayloadProvider
     }
 
     /**
+     * Sets a header, replacing any existing entry whose name differs only by
+     * case. HTTP header names are case-insensitive and PHP arrays are not.
+     *
+     * @param array<string, string> $headers
+     *
+     * @return array<string, string>
+     */
+    private function withHeader(array $headers, string $name, string $value): array
+    {
+        foreach (array_keys($headers) as $existing) {
+            if (strcasecmp((string) $existing, $name) === 0) {
+                unset($headers[$existing]);
+            }
+        }
+
+        $headers[$name] = $value;
+
+        return $headers;
+    }
+
+    /**
      * @return array<string, string>
      */
     private function normalizeHeaders(mixed $headers): array
@@ -626,8 +723,18 @@ class GenericWebserviceAdapter implements ConnectorInterface, PayloadProvider
 
         $normalized = [];
         foreach ($headers as $name => $value) {
-            if (!is_string($name) || !is_scalar($value)) {
-                throw new ConfigurationException('Adapter headers must map string names to scalar values.', ErrorCodes::CONFIG_INVALID);
+            if (!is_string($name) || preg_match(self::HEADER_NAME_PATTERN, $name) !== 1) {
+                throw new ConfigurationException(
+                    'Adapter header names must be valid RFC 7230 tokens (no spaces, CR/LF or NUL).',
+                    ErrorCodes::CONFIG_INVALID,
+                );
+            }
+
+            if (!is_scalar($value) || preg_match('/[\r\n\0]/', (string) $value) === 1) {
+                throw new ConfigurationException(
+                    sprintf('Adapter header "%s" must be a scalar value without CR, LF or NUL.', $name),
+                    ErrorCodes::CONFIG_INVALID,
+                );
             }
 
             $normalized[$name] = (string) $value;
@@ -641,27 +748,66 @@ class GenericWebserviceAdapter implements ConnectorInterface, PayloadProvider
      */
     private function buildUrl(string $path, array $variables, array $query): string
     {
-        $replacements = [];
+        if (preg_match('/[\x00-\x1F\x7F]/', $path) === 1) {
+            throw new ConfigurationException('Endpoint path must not contain control characters.', ErrorCodes::CONFIG_INVALID);
+        }
+
+        $pathPlaceholders = [];
         foreach ($variables as $placeholder => $value) {
-            $replacements[$placeholder] = rawurlencode($value);
+            $pathPlaceholders[$placeholder] = rawurlencode($value);
         }
 
-        $path = strtr($path, $replacements);
+        $path = strtr($path, $pathPlaceholders);
 
-        foreach ($query as $key => $value) {
-            if (!is_string($key) || !is_scalar($value)) {
-                throw new ConfigurationException('Endpoint query values must be scalar and keyed by string.', ErrorCodes::CONFIG_INVALID);
-            }
-
-            $query[$key] = strtr((string) $value, $replacements);
+        if (preg_match('#^https?://#i', $path) === 1) {
+            $url = $this->assertSameOrigin($path);
+        } else {
+            // ltrim() also neutralises protocol-relative paths ("//other.host").
+            $url = $this->baseUri . '/' . ltrim($path, '/');
         }
-
-        $url = preg_match('#^https?://#i', $path) === 1
-            ? $path
-            : $this->baseUri . '/' . ltrim($path, '/');
 
         if ($query !== []) {
-            $url .= (str_contains($url, '?') ? '&' : '?') . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+            $encoded = [];
+
+            foreach ($query as $key => $value) {
+                if (!is_string($key) || !is_scalar($value)) {
+                    throw new ConfigurationException('Endpoint query values must be scalar and keyed by string.', ErrorCodes::CONFIG_INVALID);
+                }
+
+                // Substitution happens before encoding, so http_build_query()
+                // encodes every value exactly once. Values in configuration
+                // must therefore be given unencoded.
+                $encoded[$key] = strtr((string) $value, $variables);
+            }
+
+            $url .= (str_contains($url, '?') ? '&' : '?') . http_build_query($encoded, '', '&', PHP_QUERY_RFC3986);
+        }
+
+        return $url;
+    }
+
+    /**
+     * Endpoint paths are operator-controlled configuration, but an absolute
+     * path must not be able to point the adapter at a different host than
+     * base_uri (that would turn configuration into an SSRF pivot).
+     */
+    private function assertSameOrigin(string $url): string
+    {
+        $parts = parse_url($url);
+
+        if (!is_array($parts) || isset($parts['user']) || isset($parts['pass'])) {
+            throw new ConfigurationException(
+                'Absolute endpoint paths must not embed credentials.',
+                ErrorCodes::CONFIG_BASE_URI_INVALID,
+            );
+        }
+
+        if (self::originOf($url) !== $this->baseOrigin) {
+            throw new ConfigurationException(
+                'Absolute endpoint paths must use the same scheme, host and port as base_uri. '
+                . 'Configure a separate adapter for a different origin.',
+                ErrorCodes::CONFIG_BASE_URI_INVALID,
+            );
         }
 
         return $url;
@@ -675,10 +821,49 @@ class GenericWebserviceAdapter implements ConnectorInterface, PayloadProvider
     private function throwForStatus(Response $response): never
     {
         if ($response->status === 408 || $response->status === 425 || $response->status === 429 || $response->isServerError()) {
-            throw new TransientHttpException($response->status, $response->body);
+            throw new TransientHttpException(
+                $response->status,
+                $response->body,
+                null,
+                self::retryAfterSeconds($response->header('Retry-After')),
+            );
         }
 
         throw new PermanentHttpException($response->status, $response->body);
+    }
+
+    /**
+     * Retry-After is either delta-seconds or an HTTP-date. Values outside
+     * 0..86400 are ignored: a server must not be able to stall a worker for
+     * days just by sending a large number.
+     */
+    private static function retryAfterSeconds(?string $header): ?int
+    {
+        if ($header === null) {
+            return null;
+        }
+
+        $header = trim($header);
+
+        if ($header === '') {
+            return null;
+        }
+
+        if (ctype_digit($header)) {
+            $seconds = (int) $header;
+
+            return $seconds <= 86_400 ? $seconds : null;
+        }
+
+        $timestamp = strtotime($header);
+
+        if ($timestamp === false) {
+            return null;
+        }
+
+        $seconds = $timestamp - time();
+
+        return $seconds >= 0 && $seconds <= 86_400 ? $seconds : null;
     }
 
     private function scalarId(mixed $value): ?string
@@ -720,6 +905,29 @@ class GenericWebserviceAdapter implements ConnectorInterface, PayloadProvider
         $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
 
         return in_array($scheme, ['http', 'https'], true);
+    }
+
+    /**
+     * @return array{0: string, 1: string, 2: int}|null Lowercase scheme and
+     *                                                    host, effective port.
+     */
+    private static function originOf(string $url): ?array
+    {
+        $parts = parse_url($url);
+
+        if (!is_array($parts) || !isset($parts['scheme'], $parts['host'])) {
+            return null;
+        }
+
+        $scheme = strtolower($parts['scheme']);
+
+        if (!in_array($scheme, ['http', 'https'], true)) {
+            return null;
+        }
+
+        $port = isset($parts['port']) ? (int) $parts['port'] : ($scheme === 'https' ? 443 : 80);
+
+        return [$scheme, strtolower($parts['host']), $port];
     }
 
     private static function placeholderHint(string $value): string

@@ -6,6 +6,7 @@ namespace IranAccounting\Http;
 
 use IranAccounting\Exception\ProtocolException;
 use IranAccounting\Support\Json;
+use IranAccounting\Support\Redactor;
 use IranAccounting\Validation\ErrorCodes;
 use JsonException;
 
@@ -71,7 +72,7 @@ final class Response
 
     public function preview(int $limit = 500): string
     {
-        $body = trim($this->body);
+        $body = Redactor::secrets(trim($this->body));
 
         return strlen($body) > $limit ? substr($body, 0, $limit) . '…' : $body;
     }

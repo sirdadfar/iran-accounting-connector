@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace IranAccounting\Exception;
 
+use IranAccounting\Support\Redactor;
 use IranAccounting\Validation\ErrorCodes;
 use Throwable;
 
@@ -22,7 +23,7 @@ final class PermanentHttpException extends HttpException
 
     private static function preview(string $body): string
     {
-        $body = trim($body);
+        $body = Redactor::secrets(trim($body));
 
         return strlen($body) > 300 ? substr($body, 0, 300) . '…' : $body;
     }

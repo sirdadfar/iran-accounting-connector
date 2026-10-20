@@ -1,92 +1,230 @@
 # iran-accounting-connector
 
-همگام‌سازی **فاکتور فروش، پرداخت و مشتری** از فروشگاه اینترنتی (ووکامرس یا هر اپلیکیشن سفارشی)
-با نرم‌افزارهای حسابداری ایرانی — همراه با نگاشت فیلد، جلوگیری از ثبت تکراری (idempotency)،
-تلاش مجدد هوشمند، اجرای آزمایشی (dry-run) و کدهای خطای دوزبانه فارسی/انگلیسی.
+همگام‌سازی فاکتور فروش، پرداخت و مشتری از فروشگاه اینترنتی به نرم‌افزار حسابداری ایرانی، با نگاشت
+فیلد، جلوگیری از ثبت تکراری، تلاش مجدد کنترل‌شده و اجرای آزمایشی.
 
-> **وضعیت صادقانه: این پروژه یک «چارچوب» است، نه یک اتصال تأییدشده به محصول خاص.**
-> اتصال‌دهنده‌ی عمومی JSON/HTTP پیاده‌سازی و با یک کلاینت HTTP جعلی به‌صورت سرتاسری تست شده است.
-> اتصال‌دهنده‌های محک، هلو و سپیدار به‌صورت **پروفایل مرجع با جای‌نگهدار (placeholder)** ارائه شده‌اند:
-> **هیچ آدرس واقعی و هیچ نام فیلد حدس‌زده‌شده‌ای در آن‌ها وجود ندارد.**
-> بخش [«تأییدشده در برابر مرجع»](#۱۲-تأییدشده-در-برابر-مرجع) را ببینید.
+[![Tests](https://github.com/sirdadfar/iran-accounting-connector/actions/workflows/tests.yml/badge.svg)](https://github.com/sirdadfar/iran-accounting-connector/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![PHP 8.1+](https://img.shields.io/badge/php-8.1%2B-777bb4.svg)](composer.json)
 
-مستندات انگلیسی: [`README.md`](README.md)
+> **وضعیت صادقانه:** این بسته یک **چارچوب** است، نه اتصال تأییدشده به یک محصول خاص. اتصال‌دهنده‌ی
+> عمومی JSON/HTTP پیاده‌سازی و با کلاینت جعلی به‌صورت سرتاسری تست شده است. محک، هلو و سپیدار فقط
+> **پروفایل مرجع با جای‌نگهدار** هستند: هیچ URL واقعی و هیچ نام فیلد حدس‌زده‌شده‌ای در آن‌ها نیست.
+> هیچ تستی با یک سرور حسابداری زنده صحبت نمی‌کند. جزئیات در بخش
+> [محدودیت‌ها](#۸-محدودیتها-و-چیزهایی-که-داخلش-نیست).
 
----
-
-## ۱. مسئله‌ی کسب‌وکار
-
-فروشگاه‌های اینترنتی ایرانی معمولاً دفاتر خود را در یک نرم‌افزار حسابداری دسکتاپ/سروری (محک، هلو،
-سپیدار و ...) نگه می‌دارند و برای اتصال فروشگاه به آن، یک برنامه‌نویس استخدام می‌کنند. قیمت‌های
-رایج این پروژه در بازار حدوداً **۳۸ تا ۸۲ میلیون تومان** است؛ اما بیشتر این هزینه صرف «صدا زدن یک API»
-نمی‌شود، صرف سه چیزی می‌شود که در محیط واقعی می‌شکنند:
-
-۱. **نگاشت (Mapping)** — فروشگاه `billing.code` می‌فرستد، حسابداری نام فیلد خودش را می‌خواهد، آن هم
-   درون پوشش (envelope) مخصوص خودش. هر مشتری شکل متفاوتی دارد.
-۲. **جلوگیری از تکرار (Idempotency)** — سفارش‌ها از طریق وبهوک و کرون با تلاش مجدد تحویل داده می‌شوند.
-   یک اتصال ساده‌لوحانه یک فاکتور را دو بار ثبت می‌کند و حسابدار باید سند تکراری را از دفاتر حذف کند.
-۳. **تلاش مجدد (Retry)** — سرورهای حسابداری روی شبکه‌ی داخلی هستند، شب‌ها ری‌استارت می‌شوند، در
-   دسته‌های بزرگ Timeout می‌دهند و گاهی به‌جای JSON یک صفحه‌ی HTML برمی‌گردانند. تکرار بی‌پایان یک
-   **خطای اعتبارسنجی** به‌اندازه‌ی تکرارنکردن یک **Timeout** خطرناک است.
-
-این کتابخانه همان سه دغدغه را به‌صورت کامپوننت‌های تست‌شده بسته‌بندی می‌کند تا پروژه از
-«پر کردن پروفایل نگاشت» شروع شود، نه از «نوشتن دوباره‌ی حلقه‌ی سینک».
+مستندات انگلیسی: [`README.md`](README.md) — سیاست امنیتی: [`SECURITY.md`](SECURITY.md) — راهنمای
+یکپارچه‌سازی: [`docs/integration-fa.md`](docs/integration-fa.md)
 
 ---
 
-## ۲. معماری
+## ۱. این پروژه چه مشکلی را حل می‌کند
 
-```
-فروشگاه (ووکامرس / اپ سفارشی)
-        │  فاکتور، پرداخت، مشتری
-        ▼
- ┌──────────────────────────────────────────────────────────────────┐
- │ Sync\InvoiceSyncer / Sync\PaymentSyncer                          │
- │  ۱. اعتبارسنجی   (IR-VAL-*)  ──► Validation\ValidationResult      │
- │  ۲. نگاشت        (IR-MAP-*)  ──► Mapping\FieldMapper              │
- │  ۳. Claim/بررسی  (IR-IDEM-*) ──► Idempotency\IdempotencyStore     │
- │  ۴. ارسال+تلاش   ─────────────► ConnectorInterface                │
- │  ۵. ثبت نتیجه     ─────────────► Sync\SyncResult                   │
- └───────────────┬───────────────────────────────┬──────────────────┘
-                 │                               │
-                 ▼                               ▼
-      Retry\RetryPolicy                   لایه‌ی اتصال‌دهنده
-      • عقب‌نشینی نمایی                   ├ GenericWebserviceAdapter  (پیاده‌سازی و تست‌شده)
-      • Jitter محدود                      ├ MahakAdapter              (پروفایل مرجع)
-      • فقط خطای موقت (Transient)         ├ HolooAdapter              (پروفایل مرجع)
-      • Retry\Sleeper تزریق‌شدنی          ├ SepidarAdapter            (پروفایل مرجع)
-                                          └ SqlServerAdapter          (اسکلت آزمایشی)
-                 │
-                 ▼
-        Http\Client  (سبک PSR-18، فقط یک متد)
-        ├ CurlClient   انتقال در محیط تولید (خودش تلاش مجدد نمی‌کند)
-        └ FakeClient   تست و دمو، بدون دسترسی به شبکه
-```
+فروشگاه اینترنتی سفارش را در ووکامرس یا اپلیکیشن سفارشی ثبت می‌کند و دفتر حسابداری در یک نرم‌افزار
+دسکتاپ/سروری جداست. اتصال این دو معمولاً در سه نقطه می‌شکند: **نگاشت** فیلدهایی که در هر نصب نام
+متفاوتی دارند، **تکرار** اسناد به‌دلیل وبهوک و کرونی که دوباره تلاش می‌کنند، و **تلاش مجدد** یک
+Timeout به‌عنوان یک خطای اعتبارسنجی.
 
-قاعده‌ی کلیدی: **لایه‌ی انتقال هیچ‌وقت تلاش مجدد نمی‌کند.** تصمیم تلاش مجدد در `RetryPolicy` است تا
-idempotency، شمارش تلاش‌ها و لاگ همه در یک جا بمانند.
+این بسته آن سه دغدغه را به کامپوننت‌های جدا و تست‌شده تبدیل می‌کند تا پروژه از «پر کردن پروفایل
+نگاشت» شروع شود، نه از «نوشتن دوباره‌ی حلقه‌ی سینک».
 
----
+## ۲. امکانات
 
-## ۳. پیش‌نیازها و نصب
+**دامنه و پول**
 
-* PHP نسخه‌ی **۸.۱ یا بالاتر** (توسعه و تست محلی روی ۸.۳.۶؛ ماتریس CI شامل ۸.۱/۸.۲/۸.۳ است)
-* `ext-json` (الزامی)، `ext-curl` (انتقال پیش‌فرض)، `ext-pdo` (مخزن پایدار جلوگیری از تکرار)
+* `Domain\Money`: مبلغ همیشه **عدد صحیح ریال** است؛ `add/subtract/multiply` سرریز ۶۴ بیتی را تشخیص
+  می‌دهد و بی‌صدا به `float` تبدیل نمی‌شود. قالب‌بندی با جداکننده‌ی فارسی و ارقام فارسی اختیاری.
+* `Domain\Invoice`، `InvoiceLine`، `Payment`، `Customer`، `Account`: DTOهای تغییرناپذیر با
+  `declare(strict_types=1)`؛ مالیات ردیف با Basis Point (۹۰۰ = ۹٪) و گردکردن نیم‌به‌بالا با حساب صحیح.
+
+**اعتبارسنجی**
+
+* `Validation\InvoiceValidator` / `PaymentValidator`: جمع سند با رواداری ۱ ریال، کد ملی ۱۰ رقمی،
+  موبایل، ارز `IRR`، تاریخ آینده، تخفیف بیش از مبلغ و سرریز محاسبات (`IR-VAL-018`).
+* `Validation\ValidationError`: کد پایدار، فیلد، پیام فارسی و انگلیسی، و `context` قابل‌عیب‌یابی.
+  کد ملی و موبایل در `context` ماسک می‌شوند.
+
+**نگاشت**
+
+* `Mapping\FieldMapper`: مسیرهای نقطه‌ای مبدأ/مقصد، مقدار پیش‌فرض، فیلد الزامی/اختیاری،
+  `transform` قابل‌فراخوانی و `MappingProfile` برای پروفایل هر مشتری.
+* `Support\JalaliDate`: تبدیل میلادی ↔ شمسی بدون وابستگی اضافه، با الگوریتم چرخه‌ی ۳۳ساله و تست
+  رفت‌وبرگشت؛ برای مقصدی که تاریخ شمسی می‌خواهد.
+
+**جلوگیری از تکرار**
+
+* `Idempotency\IdempotencyStore` با پروتکل **Claim → Complete/Fail**؛ `ArrayIdempotencyStore` برای
+  تست/دمو و `PdoIdempotencyStore` (SQLite/MySQL) برای تولید.
+* کلید قطعی `provider:operation:sha256(externalId)`؛ موفقیت هرگز reclaim نمی‌شود، شکست و قفل
+  منقضی‌شده reclaim می‌شوند، و خطای مخزن **fail closed** است.
+
+**تلاش مجدد**
+
+* `Retry\RetryPolicy`: فقط `TransientFailure` (۵xx، ۴۰۸، ۴۲۵، ۴۲۹، قطع اتصال، Timeout) تکرار می‌شود؛
+  عقب‌نشینی نمایی با Jitter محدود و `Sleeper` تزریق‌شدنی.
+* هدر `Retry-After` تا سقف `maxDelayMs` رعایت می‌شود؛ مقدار بزرگ‌تر باعث توقف تلاش می‌شود، نه تکرار
+  زودتر از موعد.
+* اگر اتصال‌دهنده کلید idempotency نفرستد، `OperationRunner` بودجه‌ی تلاش را به ۱ کاهش می‌دهد و
+  هشدار `IR-IDEM-003` برمی‌گرداند.
+
+**اتصال‌دهنده‌ها**
+
+* `Adapter\GenericWebserviceAdapter`: JSON/HTTP با اندپوینت، هدر، کد موفق/تکراری، مسیر پارامتری و
+  هدر idempotency قابل‌تنظیم. مسیرهای مطلق فقط روی همان origin مجازند.
+* `Adapter\MahakAdapter`، `HolooAdapter`، `SepidarAdapter`: پروفایل مرجع با `__FILL_*__` که تا پر
+  نشدن، سازنده اجازه‌ی اجرا نمی‌دهد.
+* `Adapter\SqlServerAdapter`: اسکلت آزمایشی برای اتصال مستقیم به دیتابیس؛ همه‌ی نوشتن‌ها
+  `IR-ADP-003` هستند و هیچ نام جدول/ستونی حدس زده نشده است.
+
+**انتقال، پایش و تست**
+
+* `Http\CurlClient`: تأیید TLS، بدون redirect، محدود به HTTP/HTTPS، Timeout اتصال و کل، بدون retry
+  داخلی. `Http\Request` متد، URL و هدرها را سخت‌گیرانه اعتبارسنجی می‌کند.
+* `Support\Redactor`: پاک‌سازی توکن/رمز از پیام خطا، پیش‌نمایش پاسخ و پیام سلامت؛ ماسک PII.
+* `Sync\SyncResult::toLogArray()`: شکل پیشنهادی لاگ، بدون `payload` حاوی داده‌ی مشتری.
+* `Testing\FakeClient`، `FakeSleeper`، `FrozenClock`؛ دموی `bin/sync-demo.php` بدون شبکه.
+
+## ۳. پیش‌نیازها
+
+| نیاز | نسخه/وضعیت |
+| --- | --- |
+| PHP | `>=8.1`؛ ماتریس CI روی **8.1 / 8.2 / 8.3 / 8.4** |
+| Composer | 2.x |
+| `ext-json` | الزامی (در `composer.json`) |
+| `ext-curl` | برای `Http\CurlClient`؛ در تست‌ها لازم نیست (`FakeClient`) |
+| `ext-pdo` | برای `PdoIdempotencyStore`؛ SQLite یا MySQL |
+| CI | ماتریس 8.1 / 8.2 / 8.3 / 8.4 در `.github/workflows/tests.yml` تنظیم شده است |
+
+PHP 8.4 در ماتریس CI این نسخه اجرا و تست می‌شود. حداقل نسخه 8.1 است و نسخه‌های قدیمی‌تر (7.x و 8.0)
+تست نشده‌اند.
+
+## ۴. نصب و راه‌اندازی
+
+### ۴.۱. نصب از مخزن (وضعیت فعلی)
+
+این بسته هنوز در Packagist منتشر نشده است؛ `composer require sirdadfar/iran-accounting-connector`
+بدون تنظیم مخزن کار نمی‌کند. از نصب VCS استفاده کنید:
 
 ```bash
-COMPOSER_ALLOW_SUPERUSER=1 composer require sirdadfar/iran-accounting-connector
-# یا از روی سورس:
-COMPOSER_ALLOW_SUPERUSER=1 composer install
+composer config repositories.iran-accounting-connector vcs https://github.com/sirdadfar/iran-accounting-connector
+composer require sirdadfar/iran-accounting-connector:dev-main
 ```
 
----
+هیچ tag منتشرشده‌ای وجود ندارد، بنابراین `dev-main` تنها مرجع فعلی است. برای تولید، یک commit مشخص
+را pin کنید:
 
-## ۴. شروع سریع (مسیر کد تولید)
+```bash
+composer require sirdadfar/iran-accounting-connector:dev-main#<commit-sha>
+```
+
+در محیط CI/کانتینر که با root اجرا می‌شود، دستورها را با `COMPOSER_ALLOW_SUPERUSER=1` اجرا کنید.
+
+### ۴.۲. نصب از سورس برای توسعه
+
+```bash
+git clone https://github.com/sirdadfar/iran-accounting-connector.git
+cd iran-accounting-connector
+COMPOSER_ALLOW_SUPERUSER=1 composer install
+vendor/bin/phpunit
+php bin/sync-demo.php
+```
+
+`composer.lock` در مخزن نیست (کتابخانه است)؛ برای بازتولید دقیق، lock محیط خودتان را نگه دارید.
+
+### ۴.۳. اولین اتصال
+
+۱. جدول idempotency را بسازید:
+
+```php
+use IranAccounting\Idempotency\PdoIdempotencyStore;
+
+$pdo = new PDO('sqlite:/var/lib/shop-sync/idempotency.sqlite');
+$store = new PdoIdempotencyStore($pdo);
+$store->migrate();
+```
+
+۲. فایل پیکربندی را از بخش [پیکربندی](#۵-پیکربندی) بسازید (خارج از مخزن).
+۳. یک فاکتور را با `dryRun: true` بفرستید و بدنه را با مستندات مقصد مقایسه کنید.
+۴. پس از تأیید روی شرکت آزمایشی، ورکر را طبق [`docs/deployment-fa.md`](docs/deployment-fa.md) راه بیندازید.
+
+## ۵. پیکربندی
+
+### ۵.۱. کلیدهای سطح اتصال‌دهنده
+
+| کلید | پیش‌فرض | معنا |
+| --- | --- | --- |
+| `name` | `generic-webservice` | نام اتصال‌دهنده؛ بخشی از کلید idempotency. تغییر آن namespace جدید می‌سازد. |
+| `base_uri` | — (الزامی) | آدرس پایه‌ی مطلق `http(s)`، بدون credentials/query/fragment. |
+| `headers` | `[]` | هدرهای هر درخواست؛ نام معتبر RFC 7230، مقدار بدون CR/LF/NUL. |
+| `endpoints` | `[]` | اندپوینت‌ها؛ حداقل `invoice` لازم است. |
+| `mapping` | `[]` | پروفایل نگاشت هر عملیات؛ اگر خالی باشد از قرارداد عمومی بسته استفاده می‌شود. |
+| `mapping_defaults` | `[]` | مقادیر ثابت اولیه‌ی هر عملیات (مثلاً `Currency => IRR`). |
+| `success_codes` | `[200,201,202,204]` | کدهای HTTP موفق. |
+| `duplicate_codes` | `[]` | کدهایی که یعنی «قبلاً ثبت شده» (مثلاً `409`). |
+| `timeout` | `10.0` | Timeout کل درخواست به ثانیه؛ باید متناهی و مثبت باشد. |
+| `idempotency_header` | `Idempotency-Key` | نام هدر کلید تکرار؛ رشته‌ی خالی یعنی «نمی‌فرستم» و retry خودکار را محدود می‌کند. |
+| `idempotency_key_prefix` | `iac` | پیشوند مقدار کلید. |
+
+### ۵.۲. کلیدهای هر اندپوینت
+
+| کلید | پیش‌فرض | معنا |
+| --- | --- | --- |
+| `method` | `POST` | `GET/POST/PUT/PATCH/DELETE` |
+| `path` | — (الزامی) | مسیر نسبی یا مطلق هم‌origin؛ جای‌نگهدارها: `{number}`، `{external_id}`، `{code}` |
+| `id_path` | `id` | مسیر نقطه‌ای شناسه‌ی سند در پاسخ JSON؛ `null` یعنی از `external_id` استفاده کن |
+| `query` | `[]` | پارامترهای Query؛ مقادیر را **رمزگذاری‌نشده** بنویسید |
+| `headers` | `[]` | هدرهای مخصوص همین اندپوینت |
+| `number_path` | `number` | مسیر شماره‌ی سند در پاسخ `find_invoice` |
+| `status_path` | `status` | مسیر وضعیت سند در پاسخ `find_invoice` |
+
+اندپوینت‌های شناخته‌شده: `invoice`، `payment`، `customer`، `find_invoice`، `health`.
+
+### ۵.۳. نمونه
 
 ```php
 <?php
-declare(strict_types=1);
+// config/erp.php — تخیلی؛ example.test دامنه‌ی رزروشده است.
+return [
+    'name'     => 'shop-erp',
+    'base_uri' => 'https://erp.example.test/api/v1',
+    'headers'  => ['Authorization' => 'Bearer ' . getenv('ERP_TOKEN')],
+    'endpoints' => [
+        'invoice'      => ['method' => 'POST', 'path' => '/invoices',          'id_path' => 'data.id'],
+        'payment'      => ['method' => 'POST', 'path' => '/payments',          'id_path' => 'data.id'],
+        'customer'     => ['method' => 'PUT',  'path' => '/customers/{code}',  'id_path' => 'data.id'],
+        'find_invoice' => [
+            'method' => 'GET', 'path' => '/invoices/{number}', 'id_path' => 'data.id',
+            'number_path' => 'data.number', 'status_path' => 'data.status',
+        ],
+        'health'       => ['method' => 'GET', 'path' => '/health', 'id_path' => null],
+    ],
+    'mapping' => [
+        'invoice' => [
+            'number'          => 'Invoice.Number',
+            'external_id'     => 'Invoice.ExternalId',
+            'issued_at'       => ['target' => 'Invoice.Date', 'transform' => static fn (string $v): string => (new DateTimeImmutable($v))->format('Y-m-d')],
+            'customer.code'   => 'Partner.Code',
+            'customer.name'   => 'Partner.Name',
+            'lines'           => ['target' => 'Items', 'required' => true, 'transform' => $mapLines],
+            'tax'             => 'Totals.Vat',
+            'discount'        => 'Totals.Discount',
+            'total'           => 'Totals.Amount',
+        ],
+        'payment'  => [/* ... */],
+        'customer' => [/* ... */],
+    ],
+    'duplicate_codes' => [409],
+    'mapping_defaults' => ['invoice' => ['Currency' => 'IRR']],
+];
+```
 
+جزئیات نگاشت و تبدیل تاریخ شمسی: [`docs/mapping-fa.md`](docs/mapping-fa.md).
+
+## ۶. استفاده
+
+### ۶.۱. ساخت اجزا
+
+```php
 use IranAccounting\Adapter\GenericWebserviceAdapter;
 use IranAccounting\Http\CurlClient;
 use IranAccounting\Idempotency\PdoIdempotencyStore;
@@ -95,10 +233,8 @@ use IranAccounting\Sync\InvoiceSyncer;
 use IranAccounting\Sync\OperationRunner;
 use IranAccounting\Validation\InvoiceValidator;
 
-$pdo = new PDO('mysql:host=127.0.0.1;dbname=shop;charset=utf8mb4', $user, $password);
-
-$store = new PdoIdempotencyStore($pdo);   // جدول: iran_accounting_idempotency
-$store->migrate();                        // یک‌بار در هر دیپلوی (یا DDL را دستی اجرا کنید)
+$store = new PdoIdempotencyStore($pdo);
+$store->migrate();
 
 $adapter = new GenericWebserviceAdapter(new CurlClient(), require __DIR__ . '/config/erp.php');
 
@@ -109,236 +245,158 @@ $runner = new OperationRunner(
 );
 
 $syncer = new InvoiceSyncer($adapter, $runner, new InvoiceValidator());
+```
 
-// ۱) پیش‌نمایش ایمن: اعتبارسنجی + نگاشت + بررسی تکرار، بدون تماس شبکه و بدون نوشتن.
+### ۶.۲. پیش‌نمایش، سپس ارسال
+
+```php
+// ۱) اعتبارسنجی + نگاشت + بررسی تکرار؛ بدون تماس شبکه و بدون نوشتن.
 $preview = $syncer->sync($invoice, dryRun: true);
-// $preview->status === 'dry_run' و $preview->payload دقیقاً همان بدنه‌ای است که ارسال می‌شد
+// $preview->status === SyncStatus::DryRun
+// $preview->payload === بدنه‌ای که در ارسال واقعی فرستاده می‌شود
 
 // ۲) ارسال واقعی.
 $result = $syncer->sync($invoice);
 
 match ($result->status) {
-    SyncStatus::Success   => log_info('ارسال شد', $result->remoteId),
-    SyncStatus::Duplicate => log_info('قبلاً ثبت شده، رد شد'),
-    SyncStatus::Invalid   => quarantine($invoice, $result->errors),   // IR-VAL-* / IR-MAP-*
-    SyncStatus::Failed    => retry_later($invoice, $result->errors),  // IR-TRN-*، IR-DB-*، IR-SYNC-*
-    default               => null,
+    SyncStatus::Success   => $log->info('pushed', $result->toLogArray()),
+    SyncStatus::Duplicate => $log->info('already synced', $result->toLogArray()),
+    SyncStatus::Invalid   => quarantine($invoice, $result->errors),
+    SyncStatus::Failed    => requeue($invoice, $result->errors),
+    SyncStatus::DryRun    => reviewPayload($result->payload),
 };
 ```
 
-`SyncResult` شامل `status`، `remoteId`، `attempts`، `delaysMs`، `errors[]`، `warnings[]` و
-`payload` نگاشت‌شده است؛ بنابراین فراخوان لازم نیست دوباره دلیل رخداد را حدس بزند.
+`SyncResult` شامل `status`، `operation`، `externalId`، `remoteId`، `attempts`، `delaysMs`،
+`errors[]`، `warnings[]`، `message` و `payload` است. برای لاگ از `toLogArray()` استفاده کنید تا
+`payload` حذف شود.
 
-### تنظیمات اتصال‌دهنده
+### ۶.۳. ترتیب عملیات
 
-```php
-// config/erp.php — این نمونه تخیلی است (example.test دامنه‌ی رزروشده است)
-return [
-    'name'     => 'shop-erp',
-    'base_uri' => 'https://erp.example.test/api/v1',
-    'headers'  => ['Authorization' => 'Bearer ' . getenv('ERP_TOKEN')],
-    'endpoints' => [
-        'invoice'      => ['method' => 'POST', 'path' => '/invoices',         'id_path' => 'data.id'],
-        'payment'      => ['method' => 'POST', 'path' => '/payments',         'id_path' => 'data.id'],
-        'customer'     => ['method' => 'PUT',  'path' => '/customers/{code}', 'id_path' => 'data.id'],
-        'find_invoice' => ['method' => 'GET',  'path' => '/invoices/{number}',
-                           'id_path' => 'data.id', 'number_path' => 'data.number', 'status_path' => 'data.status'],
-        'health'       => ['method' => 'GET',  'path' => '/health', 'id_path' => null],
-    ],
-    'mapping' => [
-        'invoice' => [
-            'number'          => 'Invoice.Number',
-            'external_id'     => 'Invoice.ExternalId',
-            'issued_at'       => ['target' => 'Invoice.Date', 'transform' => fn (string $v) => (new DateTimeImmutable($v))->format('Y-m-d')],
-            'customer.code'   => 'Partner.Code',
-            'customer.name'   => 'Partner.Name',
-            'customer.mobile' => ['target' => 'Partner.Mobile', 'required' => false],
-            'lines'           => ['target' => 'Items', 'required' => true, 'transform' => $mapLines],
-            'tax'             => 'Totals.Vat',
-            'discount'        => 'Totals.Discount',
-            'total'           => 'Totals.Amount',
-        ],
-        'payment'  => [ /* نگاشت فیلدها با همان دستور زبان */ ],
-        'customer' => [ /* نگاشت فیلدها با همان دستور زبان */ ],
-    ],
-    // اختیاری
-    'success_codes'          => [200, 201, 202, 204],
-    'duplicate_codes'        => [409],   // سند قبلاً در مقصد ثبت شده است → وضعیت duplicate
-    'idempotency_header'     => 'Idempotency-Key',
-    'idempotency_key_prefix' => 'iac',
-    'timeout'                => 10.0,
-    'mapping_defaults'       => ['invoice' => ['Currency' => 'IRR']],
-];
-```
+۱. `upsertCustomer` (اگر مقصد مشتری را از قبل می‌خواهد).
+۲. `pushInvoice`.
+۳. `pushPayment` پس از موفقیت فاکتور.
 
-جای‌نگهدارهای مسیر و کوئری: `{number}`، `{external_id}`، `{code}`.
-جزئیات نگاشت: [`docs/mapping-fa.md`](docs/mapping-fa.md).
+`InvoiceSyncer` و `PaymentSyncer` همین Runner و Store را به اشتراک می‌گذارند؛ کلید idempotency هر
+عملیات جداست، بنابراین تکرار پرداخت با تکرار فاکتور تداخل ندارد.
 
----
+### ۶.۴. رفتارهایی که می‌توانید روی آن‌ها حساب کنید
 
-## ۵. مدل دامنه
+* ارسال دوباره با همان `external_id` → `Duplicate` و **تعداد فراخوانی مقصد افزایش نمی‌یابد**.
+* همان شناسه با محتوای متفاوت → `Duplicate` + هشدار `IR-IDEM-002`.
+* ورکر دیگر مالک کلید است → `Duplicate` + هشدار `IR-IDEM-001`، بدون ارسال.
+* مخزن در دسترس نیست → `Failed` با `IR-DB-001`، بدون ارسال (fail closed).
+* مقصد موفق شده اما `complete()` محلی شکست خورده → `Failed` + هشدار مغایرت‌یابی دستی و `remoteId`.
+* اتصال‌دهنده بدون هدر idempotency → فقط یک تلاش + هشدار `IR-IDEM-003`.
 
-DTOهای تغییرناپذیر (immutable) با type سخت‌گیرانه. مبلغ **همیشه عدد صحیح ریالی** است؛ اعشار با
-strict types رد می‌شود و سرریز عدد صحیح تشخیص داده می‌شود (نه اینکه بی‌صدا به `float` تبدیل شود).
+### ۶.۵. ورکر
 
-| نوع | کاربرد |
-| --- | --- |
-| `Money` | ریال صحیح؛ `add/subtract/multiply`، `fromToman()`، قالب‌بندی (با ارقام فارسی اختیاری) |
-| `Customer` | `code`، `name`، `nationalId`، `mobile`، `address`، `economicCode` |
-| `InvoiceLine` | `sku`، `name`، `quantity`، `unitPrice`، `discount`، `taxRateBasisPoints` (۹۰۰ = ۹٪) |
-| `Invoice` | `number`، `externalId`، `issuedAt`، `customer`، `lines[]`، `tax`، `discount`، `total`، `currency`، `notes` |
-| `Payment` | `externalId`، `invoiceNumber`، `amount`، `paidAt`، `method`، `reference`، `accountCode` |
-| `Account` | ردیف دفتر کل (`code`، `title`، `type`، `currency`) |
+این بسته را داخل درخواست HTTP فروشگاه اجرا نکنید. سفارش را در صف بگذارید و با ورکر پردازش کنید.
+راهنمای cron/systemd، TTL قفل و مغایرت‌یابی: [`docs/deployment-fa.md`](docs/deployment-fa.md).
 
-قاعده‌ی جمع (با رواداری **۱ ریال** برای گردکردن‌های سمت مبدأ):
+## ۷. امنیت
 
-```
-مجموع (unitPrice × qty − discount هر ردیف) + مالیات − تخفیف فاکتور  ≈  total فاکتور
-```
+خلاصه‌ی طراحی و مدل اعتماد:
 
----
+* **پیکربندی مورد اعتماد اپراتور است.** `base_uri` و پروفایل نگاشت را از ورودی کاربر نگیرید.
+  مسیر مطلق اندپوینت فقط روی همان scheme/host/port مجاز است تا پیکربندی به SSRF تبدیل نشود.
+* **انتقال:** تأیید گواهی و hostname، بدون redirect، فقط HTTP/HTTPS، Timeout اتصال و کل،
+  `CURLOPT_NOSIGNAL`. `CurlClient` خودش retry نمی‌کند.
+* **ورودی:** متد alphabetic، URL مطلق بدون credentials، هدرهای RFC 7230 و بدون CR/LF/NUL (جلوگیری از
+  header injection)، Timeout متناهی.
+* **داده:** فقط JSON؛ پارسر XML/XXE و `unserialize` وجود ندارد.
+* **Idempotency:** claim اتمیک، fail-closed، و توقف retry برای POST بدون کلید تکرار.
+* **لاگ:** `Redactor` توکن/رمز را از پیام خطا و پیش‌نمایش پاسخ پاک می‌کند؛ `responseBody` خام است و
+  نباید لاگ شود؛ `toLogArray()` payload را حذف می‌کند؛ کد ملی/موبایل در context ماسک می‌شوند.
+* **احراز هویت/مجوز:** این یک کتابخانه است، نه سرویس؛ کنترل دسترسی با برنامه‌ی شماست.
+* **محدودیت شبکه:** rate limiter و allowlist خروجی داخل بسته نیست؛ آن را در صف/شبکه اعمال کنید.
 
-## ۶. جلوگیری از ثبت تکراری (Idempotency)
+جزئیات کامل، نسخه‌های پشتیبانی‌شده و مسیر گزارش خصوصی: [`SECURITY.md`](SECURITY.md).
 
-رابط `Idempotency\IdempotencyStore` پروتکل **Claim → Complete/Fail** را پیاده می‌کند:
+## ۸. محدودیت‌ها و چیزهایی که داخلش نیست
 
-۱. `reserve(key, ...)` کلید را به‌صورت اتمیک Claim می‌کند. کلید موفق هرگز پس گرفته نمی‌شود؛ کلید
-   ناموفق یا رهاشده (وضعیت `pending` قدیمی‌تر از TTL قفل) قابل پس‌گیری است.
-۲. تماس شبکه فقط پس از Claim موفق انجام می‌شود.
-۳. `complete(key, remoteId)` موفقیت را ثبت می‌کند؛ `fail(key, error)` رکورد را قابل تلاش مجدد می‌کند.
+* **هیچ سرور حسابداری زنده‌ای تست نشده است.** هیچ تستی با محک، هلو، سپیدار یا ERP واقعی حرف نمی‌زند.
+  نام فیلدها و URLها باید از مستندات نسخه‌ی نصب‌شده پر و روی شرکت آزمایشی تأیید شوند.
+* **SOAP/XML پیاده‌سازی نشده است.** اتصال‌دهنده‌ی عمومی JSON/HTTP است؛ برای SOAP یک
+  `ConnectorInterface` اختصاصی بنویسید (منطق Runner/Retry/Store قابل استفاده است).
+* **`CurlClient` تست یکپارچه‌ی شبکه ندارد.** ساخت درخواست، گزینه‌ها و دسته‌بندی خطاها بررسی شده‌اند،
+  اما TLS/پروکسی/Timeout باید روی سرور هدف آزموده شود.
+* **DDL مای‌اس‌کیوال فقط به‌عنوان متن بررسی شده است.** اجرای واقعی روی SQLite در حافظه تست شده است.
+* **هم‌زمانی چندپروسه‌ای** با پروتکل مخزن تضمین می‌شود و به‌صورت ترتیبی تست شده؛ آزمون بار چند ورکر
+  انجام نشده است.
+* **شناسه ملی حقوقی ۱۱ رقمی** فقط از نظر رقم بودن پذیرفته می‌شود؛ الگوریتم کنترلی آن پیاده‌سازی نشده.
+* **فقط ریال (`IRR`).** تبدیل تومان به ریال باید در بالادست انجام شود؛ در غیر این صورت `IR-VAL-011`.
+* **rate limiter، سقف اندازه‌ی پاسخ و رمزنگاری at-rest** داخل بسته نیست. این‌ها را در صف، پروکسی و
+  دیتابیس خودتان تأمین کنید.
+* **مقاومت در برابر DNS rebinding** فقط با allowlist شبکه‌ای قابل تأمین است؛ مقایسه‌ی origin آدرس را
+  بررسی می‌کند، نه IP resolve‌شده را.
+* **PHP 7.x و 8.0** پشتیبانی نمی‌شوند؛ حداقل نسخه 8.1 است.
+* تصمیم‌های حسابداری (مالیات سند یا ردیف، حساب گردکردن) باید با حسابدار مشتری نهایی شود.
 
-قالب کلید: `provider:operation:sha256(externalId)` — طول محدود، قطعی و تکرارپذیر؛ خودِ
-`external_id` هم برای عیب‌یابی ذخیره می‌شود.
-
-| مخزن | زمان استفاده |
-| --- | --- |
-| `ArrayIdempotencyStore` | تست، ورکرهای کوتاه‌عمر، دمو |
-| `PdoIdempotencyStore` | تولید: SQLite (تک‌سرور) یا MySQL (چند سرور) |
-
-رفتارهایی که تست‌ها قفل کرده‌اند:
-
-* ارسال دوباره با همان `external_id` → وضعیت `duplicate` و **تعداد فراخوانی کلاینت همان ۱ می‌ماند**.
-* همان `external_id` با **محتوای متفاوت** → باز هم `duplicate`، به‌همراه هشدار `IR-IDEM-002`.
-* در اختیار داشتن کلید توسط ورکر دیگر → `duplicate` + هشدار `IR-IDEM-001`، بدون ارسال.
-* از کار افتادن مخزن → **fail closed**: وضعیت `failed` با `IR-DB-001` و هیچ ارسالی انجام نمی‌شود.
-* موفقیت مقصد اما شکست در `complete()` محلی → وضعیت `failed` + هشدار صریح «مغایرت‌یابی دستی»، چون
-  این تنها حالتی است که تلاش مجدد می‌تواند سند را تکراری کند.
-
-DDL با `PdoIdempotencyStore::schemaSql('sqlite'|'mysql')` ساخته می‌شود یا با `migrate()` اجرا می‌شود.
-**روی SQLite در حافظه تأیید شده است؛ DDL مای‌اس‌کیوال فقط به‌عنوان متن بررسی شده است.**
-
----
-
-## ۷. سیاست تلاش مجدد
-
-* فقط خطاهایی که `Exception\TransientFailure` را پیاده می‌کنند تکرار می‌شوند: HTTP 5xx، ۴۰۸، ۴۲۵،
-  ۴۲۹، قطع اتصال و Timeout.
-* خطای اعتبارسنجی، نگاشت، تنظیمات و خطاهای ۴xx **بلافاصله** شکست می‌خورند.
-* عقب‌نشینی: `min(maxDelay, base × 2^(n-1))` به‌همراه Jitter محدود (`±jitterRatio`).
-* خواب از طریق `Retry\Sleeper` انجام می‌شود؛ تست‌ها `FakeSleeper` تزریق می‌کنند و تأخیرهای دقیق
-  (`[100, 200]`) را بدون معطلی بررسی می‌کنند.
-* پس از اتمام بودجه‌ی تلاش، `RetryExhaustedException` مقدار `attempts`، `delaysMs` و آخرین خطا را
-  حمل می‌کند و Runner آن را به `SyncResult::$attempts` و `$delaysMs` تبدیل می‌کند.
-
----
-
-## ۸. کدهای خطا
-
-کدها پایدارند و پیام‌ها دوزبانه‌اند. جدول کامل: [`docs/errors-fa.md`](docs/errors-fa.md).
-
-| پیشوند | حوزه | مثال |
-| --- | --- | --- |
-| `IR-VAL-*` | اعتبارسنجی سند | `IR-VAL-003` ناهم‌خوانی جمع، `IR-VAL-004` تعداد نامعتبر، `IR-VAL-002` نبود کد مشتری |
-| `IR-MAP-*` | نگاشت فیلد | `IR-MAP-001` نبود فیلد الزامی، `IR-MAP-002` شکست تبدیل |
-| `IR-CFG-*` | تنظیمات اتصال | `IR-CFG-001` آدرس پایه‌ی نامعتبر، `IR-CFG-002` نبود اندپوینت، `IR-CFG-003` عملیات پشتیبانی‌نشده |
-| `IR-ADP-*` | پروتکل و پاسخ | `IR-ADP-001` JSON نامعتبر، `IR-ADP-002` پیدا نشدن شناسه‌ی سند در پاسخ |
-| `IR-TRN-*` | انتقال | `IR-TRN-001` خطای موقت (قابل تکرار)، `IR-TRN-002` رد قطعی |
-| `IR-IDEM-*`، `IR-SYNC-*`، `IR-DB-*` | همگام‌سازی و تکرار | `IR-IDEM-001` در حال ارسال، `IR-IDEM-002` تغییر محتوا، `IR-DB-001` خرابی مخزن |
-
-هر `ValidationError` شامل `code`، `field`، `message_fa`، `message_en` و آرایه‌ی `context` است.
-
----
-
-## ۹. پروفایل‌های مرجع (محک، هلو، سپیدار) و اسکلت SQL Server
-
-محک، هلو و سپیدار **یک قرارداد HTTP پایدار، عمومی و مستقل از نسخه منتشر نکرده‌اند** که بتوان آن را
-به‌عنوان پیش‌فرض کتابخانه ارائه کرد؛ نصب‌ها بر اساس نسخه، لایسنس، افزون‌ها و استقرار درون‌سازمانی
-متفاوت‌اند. اگر نام فیلد حدس بزنیم، کتابخانه‌ای می‌سازیم که *به‌نظر* متصل است اما بی‌صدا داده‌ی اشتباه
-در دفاتر حسابداری ثبت می‌کند.
-
-بنابراین این سه اتصال‌دهنده، **زیرکلاس‌های نازک اتصال‌دهنده‌ی عمومیِ تست‌شده** هستند و فقط این‌ها را
-ارائه می‌دهند:
-
-* `PROFILE` (یک نام — همین **فضای نام** idempotency است)،
-* `endpointTemplate()` — همه‌ی مسیرها `__FILL_...__` و هیچ URL تأییدنشده‌ای وجود ندارد،
-* `mappingTemplate()` — همه‌ی مقصدها `__FILL_...__` و هیچ نام فیلد واقعی ادعا نشده است،
-* `configTemplate()` — کپی کنید، پر کنید و از مخزن کد بیرون نگه دارید.
-
-**سازنده تا زمانی که جای‌نگهدارها باقی باشند از کار می‌افتد** (`IR-CFG-001/002/004`). این کار عمدی
-است: شکست با صدای بلند بهتر از نوشتن داده‌ی حدسی در سیستم حسابداری است.
-
-`Adapter\SqlServerAdapter` یک **اسکلت آزمایشی** برای اتصال مستقیم به دیتابیس (رایج در نصب‌های قدیمی
-هلو/سپیدار) است: برای بررسی اتصال `SELECT 1` می‌زند، همه‌ی قابلیت‌های نوشتن را `false` گزارش می‌کند و
-هر متد نوشتن/جست‌وجو `IR-ADP-003` پرتاب می‌کند. هیچ نام جدول یا ستونی در آن نیست.
-
----
-
-## ۱۰. تست‌ها و دمو
+## ۹. توسعه و تست
 
 ```bash
 COMPOSER_ALLOW_SUPERUSER=1 composer install
-vendor/bin/phpunit                       # مجموعه‌ی واحد، بدون شبکه
-php bin/sync-demo.php                    # dry-run، موفقیت، تکراری، تلاش مجدد، نامعتبر، سلامت
+vendor/bin/phpunit                 # بدون شبکه
+composer validate --strict
+composer audit
+php -l src/Support/Redactor.php    # نمونه؛ روی فایل‌های تغییریافته اجرا کنید
+php bin/sync-demo.php
 ```
 
-دمو از `FakeClient` و ساعت ثابت (Frozen Clock) استفاده می‌کند و خلاصه‌ی فارسی چاپ می‌کند. عمداً
-«دموی زنده» نیست، چون سرور زنده‌ای وجود ندارد.
+وضعیت واقعی مجموعه در این نسخه: **۲۰۵ تست، ۱۴۲۳ assertion**، سبز روی PHP 8.3.6. تست‌ها از
+`FakeClient` استفاده می‌کنند و به شبکه دسترسی ندارند.
 
-نکات استقرار (کرون، TTL قفل، پایش، مغایرت‌یابی): [`docs/deployment-fa.md`](docs/deployment-fa.md).
+افزودن قابلیت:
 
----
+۱. برای اتصال‌دهنده‌ی جدید، `ConnectorInterface` (و در صورت نیاز `PayloadProvider`) را پیاده کنید؛
+   منطق سینک را دوباره ننویسید.
+۲. برای رفتار جدید در Runner/Retry، ابتدا یک تست در `tests/Unit` بنویسید؛ شبکه و زمان واقعی را تزریق
+   نکنید (`FakeSleeper`، `FrozenClock`).
+۳. کد خطای جدید را در `Validation\ErrorCodes` و `docs/errors-fa.md` اضافه کنید؛ کدهای موجود را تغییر
+   ندهید.
+۴. قبل از ارسال، `composer validate --strict`، `composer audit` و کل مجموعه را اجرا کنید.
 
-## ۱۱. تغییرات و مجوز
+CI: `.github/workflows/tests.yml` روی PHP 8.1/8.2/8.3، lint همه‌ی فایل‌های PHP، تست، دمو و
+`composer audit`.
 
-* [`CHANGELOG.md`](CHANGELOG.md)
-* مجوز MIT © ۲۰۲۶ sirdadfar — [`LICENSE`](LICENSE)
+## ۱۰. ساختار پروژه
 
----
+```text
+iran-accounting-connector/
+├── src/
+│   ├── Adapter/            GenericWebserviceAdapter، پروفایل‌های مرجع، SqlServerAdapter
+│   ├── Domain/             Money، Invoice، InvoiceLine، Payment، Customer، Account، AccountType
+│   ├── Exception/          استثناهای اتصال، انتقال، HTTP و RetryExhausted
+│   ├── Http/               Client، Request، Response، CurlClient، HealthStatus، PushReceipt
+│   ├── Idempotency/        اینترفیس مخزن، Array و Pdo، رکورد/وضعیت/کلید
+│   ├── Mapping/            FieldMapper، MappingProfile و استثنای نگاشت
+│   ├── Retry/              RetryPolicy، RetryOutcome، Sleeper
+│   ├── Support/            Redactor، JalaliDate، PersianText، Json، DotPath، Clock
+│   ├── Sync/               OperationRunner، Invoice/PaymentSyncer، SyncResult/SyncStatus
+│   ├── Testing/            FakeClient، FakeSleeper، FrozenClock
+│   └── Validation/         اعتبارسنج‌ها، ValidationError/Result، ErrorCodes
+├── tests/Unit/             تست‌های واحد بدون شبکه
+├── bin/sync-demo.php       دموی خط فرمان با FakeClient
+├── docs/                   نگاشت، خطاها، استقرار، یکپارچه‌سازی (فارسی)
+├── SECURITY.md             سیاست امنیتی و مدل اعتماد
+├── CHANGELOG.md            تاریخ تغییرات (SemVer)
+└── composer.json           PSR-4، وابستگی‌ها، اسکریپت‌ها
+```
 
-## ۱۲. تأییدشده در برابر مرجع
+## ۱۱. مجوز و استفادهٔ تجاری
 
-### تأییدشده در همین مخزن (تست واحد، بدون شبکه)
+مجوز **MIT**؛ فایل [`LICENSE`](LICENSE). استفاده‌ی تجاری، تغییر و توزیع مجاز است، به شرط حفظ متن
+مجوز. نرم‌افزار «همان‌طور که هست» ارائه می‌شود و ضمانت‌نامه‌ای ندارد؛ مسئولیت صحت اسناد حسابداری با
+مجری/مشتری است. وابستگی runtime خارج از PHP و `ext-json` وجود ندارد.
 
-| حوزه | شواهد |
-| --- | --- |
-| حساب صحیح ریالی، نبود خطای اعشاری، تشخیص سرریز | `MoneyTest` |
-| اعتبارسنجی فاکتور/پرداخت و کدهای فارسی | `InvoiceValidationTest` |
-| نگاشت: مسیر نقطه‌ای، پیش‌فرض، callable، فیلد الزامی، خطاها | `FieldMapperTest` |
-| رفتار idempotency (حافظه) | `ArrayIdempotencyStoreTest` |
-| DDL و عدم تکرار روی **SQLite در حافظه** | `PdoIdempotencyStoreTest` |
-| تلاش مجدد: دو شکست سپس موفقیت = ۳ تلاش، خطای ۴۰۰ = بدون تکرار، تأخیر `[100, 200]` | `RetryPolicyTest` |
-| همگام‌ساز: موفقیت، تکراری، dry-run، نامعتبر، تلاش مجدد، fail-closed | `InvoiceSyncerTest` |
-| شکل درخواست اتصال‌دهنده‌ی عمومی (متد/URL/هدر/بدنه)، پردازش پاسخ، خطاهای تنظیمات | `GenericWebserviceAdapterTest` |
-| پروفایل‌های مرجع: زیرکلاس بودن، جای‌نگهدارها، امتناع از اجرا | `ReferenceProfileTest` |
-| اجرای واقعی `bin/sync-demo.php` و خروجی فارسی | `SyncDemoTest` |
+## ۱۲. پشتیبانی
 
-وضعیت فعلی مجموعه: **۱۱۶ تست، ۵۲۷ assertion**، سبز روی PHP 8.3.6.
-
-### تأییدشده نیست — کارِ مجری پروژه است
-
-* **هیچ سرور حسابداری زنده‌ای در دسترس نبود.** هیچ تستی با محک، هلو، سپیدار یا هر ERP واقعی حرف نمی‌زند.
-* **نام فیلدها و آدرس‌های محک/هلو/سپیدار به‌عمد نامعلوم‌اند**؛ باید از مستندات API/SOAP/WSDL همان
-  نسخه‌ی نصب‌شده پر شوند و روی یک شرکت آزمایشی تأیید شوند.
-* **`CurlClient` تست یکپارچه ندارد** (شبکه در تست ممنوع است). ساخت درخواست و دسته‌بندی خطاها بازبینی
-  شده است، اما اثبات نشده. TLS، پروکسی و Timeout را روی سرور هدف بررسی کنید.
-* **اجرای DDL روی MySQL** انجام نشده؛ فقط متن SQL بررسی شده است.
-* **اندپوینت‌های SOAP/XML پیاده‌سازی نشده‌اند**؛ اتصال‌دهنده‌ی عمومی روی JSON/HTTP کار می‌کند.
-* **همزمانی چندپروسه‌ای** با پروتکل مخزن تضمین می‌شود و به‌صورت ترتیبی تست شده؛ آزمون بار واقعی با
-  چند ورکر انجام نشده است.
-* **شناسه ملی حقوقی ۱۱ رقمی** فقط از نظر «رقم بودن» پذیرفته می‌شود و الگوریتم کنترلی آن بررسی نمی‌شود.
-  تنها کنترلی کد ملی ۱۰ رقمی پیاده‌سازی شده است.
-* **تومان**: مبالغ فقط ریالی‌اند. `currency` باید `IRR` باشد؛ در غیر این صورت `IR-VAL-011` صادر می‌شود.
-  تبدیل تومان به ریال باید در بالادست انجام شود.
-* **ماتریس CI 8.1/8.2/8.3** در `.github/workflows/tests.yml` تنظیم شده اما اجرای محلی فقط روی 8.3.6 بوده است.
-* رفتار تخفیف، مالیات و گردکردن *در نگاشت* قابل تنظیم است، اما تصمیم حسابداری درست (مالیات در سطح سند
-  یا ردیف، حساب‌های گردکردن) باید با حسابدار مشتری نهایی شود.
+* **باگ / درخواست قابلیت:** <https://github.com/sirdadfar/iran-accounting-connector/issues>
+* **آسیب‌پذیری امنیتی:** از GitHub Security Advisories استفاده کنید
+  (<https://github.com/sirdadfar/iran-accounting-connector/security/advisories/new>) و issue عمومی
+  باز نکنید. جزئیات: [`SECURITY.md`](SECURITY.md).
+* **پاسخ:** این یک پروژه‌ی نمونه‌کار است و SLA ندارد؛ تلاش واقع‌بینانه، پاسخ اولیه در حدود یک هفته و
+  ارزیابی در حدود یک ماه است.
+* در گزارش، نسخه‌ی PHP، نسخه‌ی بسته، فایل/کلاس درگیر، مراحل بازتولید و خروجی `toLogArray()` (بدون
+  payload و بدون رمز) را بگذارید.

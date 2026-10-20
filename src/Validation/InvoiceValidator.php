@@ -10,7 +10,9 @@ use IranAccounting\Domain\InvoiceLine;
 use IranAccounting\Domain\Money;
 use IranAccounting\Support\Clock;
 use IranAccounting\Support\PersianText;
+use IranAccounting\Support\Redactor;
 use IranAccounting\Support\SystemClock;
+use OverflowException;
 
 /**
  * Validates an Invoice and returns stable, bilingual error codes.
@@ -50,8 +52,10 @@ final class InvoiceValidator
 
         if ($invoice->customer->nationalId !== null && trim($invoice->customer->nationalId) !== '') {
             if (!PersianText::isValidNationalId($invoice->customer->nationalId)) {
+                // The context is designed to be logged, so the identifier is
+                // masked instead of copied verbatim.
                 $result->addError(ErrorCodes::NATIONAL_ID_INVALID, 'customer.national_id', [
-                    'value' => $invoice->customer->nationalId,
+                    'value' => Redactor::mask($invoice->customer->nationalId),
                 ]);
             }
         }
@@ -59,7 +63,7 @@ final class InvoiceValidator
         if ($invoice->customer->mobile !== null && trim($invoice->customer->mobile) !== '') {
             if (!PersianText::isValidMobile($invoice->customer->mobile)) {
                 $result->addError(ErrorCodes::MOBILE_INVALID, 'customer.mobile', [
-                    'value' => $invoice->customer->mobile,
+                    'value' => Redactor::mask($invoice->customer->mobile, 4, 2),
                 ]);
             }
         }
@@ -95,10 +99,18 @@ final class InvoiceValidator
         $subtotal = Money::zero();
         $lineTaxTotal = Money::zero();
 
-        foreach ($invoice->lines as $index => $line) {
-            $this->validateLine($line, $index, $result);
-            $subtotal = $subtotal->add($line->net());
-            $lineTaxTotal = $lineTaxTotal->add($line->tax());
+        try {
+            foreach ($invoice->lines as $index => $line) {
+                $this->validateLine($line, $index, $result);
+                $subtotal = $subtotal->add($line->net());
+                $lineTaxTotal = $lineTaxTotal->add($line->tax());
+            }
+        } catch (OverflowException) {
+            // A malicious or broken upstream value must not escape as an
+            // uncaught exception from validation. Report a stable code instead.
+            $result->addError(ErrorCodes::AMOUNT_OVERFLOW, 'total');
+
+            return $result;
         }
 
         if ($invoice->discount->compareTo($subtotal) > 0) {
@@ -108,8 +120,15 @@ final class InvoiceValidator
             ]);
         }
 
-        $expectedTotal = $subtotal->add($invoice->tax)->subtract($invoice->discount);
-        $difference = abs($expectedTotal->amount() - $invoice->total->amount());
+        try {
+            $expectedTotal = $subtotal->add($invoice->tax)->subtract($invoice->discount);
+            $difference = $expectedTotal->subtract($invoice->total)->amount();
+            $difference = $difference < 0 ? -$difference : $difference;
+        } catch (OverflowException) {
+            $result->addError(ErrorCodes::AMOUNT_OVERFLOW, 'total');
+
+            return $result;
+        }
 
         if ($difference > 1) {
             $result->addError(ErrorCodes::TOTAL_MISMATCH, 'total', [

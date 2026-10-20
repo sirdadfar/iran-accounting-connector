@@ -28,6 +28,7 @@ final class ErrorCodes
     public const CUSTOMER_NAME_REQUIRED = 'IR-VAL-015';
     public const PAYMENT_INVOICE_REQUIRED = 'IR-VAL-016';
     public const AMOUNT_NEGATIVE = 'IR-VAL-017';
+    public const AMOUNT_OVERFLOW = 'IR-VAL-018';
 
     // Mapping
     public const MAPPING_REQUIRED_FIELD_MISSING = 'IR-MAP-001';
@@ -53,6 +54,7 @@ final class ErrorCodes
     // Idempotency / sync
     public const SYNC_IN_FLIGHT = 'IR-IDEM-001';
     public const SYNC_PAYLOAD_CHANGED = 'IR-IDEM-002';
+    public const SYNC_RETRY_UNSAFE = 'IR-IDEM-003';
     public const SYNC_UNEXPECTED = 'IR-SYNC-001';
     public const SYNC_VALIDATION_FAILED = 'IR-SYNC-002';
     public const STORE_FAILURE = 'IR-DB-001';
@@ -83,6 +85,7 @@ final class ErrorCodes
             self::CUSTOMER_NAME_REQUIRED => ['en' => 'Customer name is required.', 'fa' => 'نام مشتری الزامی است.'],
             self::PAYMENT_INVOICE_REQUIRED => ['en' => 'Payment must reference an invoice number.', 'fa' => 'پرداخت باید به شماره فاکتور ارجاع داشته باشد.'],
             self::AMOUNT_NEGATIVE => ['en' => 'Amount cannot be negative.', 'fa' => 'مبلغ نمی‌تواند منفی باشد.'],
+            self::AMOUNT_OVERFLOW => ['en' => 'Amount arithmetic overflowed the 64-bit integer range.', 'fa' => 'محاسبه‌ی مبلغ از محدوده‌ی عدد صحیح ۶۴ بیتی بیرون زد.'],
             self::MAPPING_REQUIRED_FIELD_MISSING => ['en' => 'A required source field is missing for mapping.', 'fa' => 'فیلد الزامی برای نگاشت در سند وجود ندارد.'],
             self::MAPPING_TRANSFORM_FAILED => ['en' => 'A mapping transform failed.', 'fa' => 'تبدیل مقدار در نگاشت با خطا مواجه شد.'],
             self::MAPPING_TARGET_INVALID => ['en' => 'Mapping target path is invalid.', 'fa' => 'مسیر مقصد نگاشت معتبر نیست.'],
@@ -98,6 +101,7 @@ final class ErrorCodes
             self::TRANSPORT_FAILURE => ['en' => 'Transport failure.', 'fa' => 'خطا در ارتباط با سرور مقصد.'],
             self::SYNC_IN_FLIGHT => ['en' => 'The same document is already being pushed.', 'fa' => 'همین سند در حال ارسال است.'],
             self::SYNC_PAYLOAD_CHANGED => ['en' => 'The external id was already used with a different payload.', 'fa' => 'این شناسه خارجی قبلاً با محتوای متفاوتی ارسال شده است.'],
+            self::SYNC_RETRY_UNSAFE => ['en' => 'Retry was disabled because the adapter cannot send an idempotency key.', 'fa' => 'تلاش مجدد انجام نشد چون اتصال‌دهنده کلید جلوگیری از تکرار نمی‌فرستد.'],
             self::SYNC_UNEXPECTED => ['en' => 'Unexpected synchronization failure.', 'fa' => 'خطای پیش‌بینی‌نشده در همگام‌سازی.'],
             self::SYNC_VALIDATION_FAILED => ['en' => 'Document failed validation before synchronization.', 'fa' => 'سند پیش از همگام‌سازی اعتبارسنجی نشد.'],
             self::STORE_FAILURE => ['en' => 'Idempotency store failure.', 'fa' => 'خطا در ذخیره‌سازی وضعیت جلوگیری از تکرار.'],

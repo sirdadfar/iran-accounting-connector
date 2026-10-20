@@ -10,9 +10,13 @@ composer.lock
 # Local configuration and runtime data
 *.local.php
 /.env
+/.env.*
 /idempotency.sqlite
 *.sqlite
 *.sqlite3
+*.log
+/build/
+/.php-cs-fixer.cache
 
 # Editor / OS noise
 .idea/

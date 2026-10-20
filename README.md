@@ -1,92 +1,235 @@
 # iran-accounting-connector
 
-Sync **sales invoices, payments and customers** from an online shop (WooCommerce or any custom app)
-into Iranian accounting software — with field mapping, idempotency, retries, dry-run and
-bilingual (Persian/English) error codes.
+Push sales invoices, payments and customers from an online shop into Iranian accounting software,
+with field mapping, idempotency, controlled retries and dry-run support.
 
-> **Honest status: this is a framework, not a certified vendor integration.**
-> The generic JSON/HTTP adapter is implemented and tested end-to-end against a fake HTTP client.
-> Mahak / Holoo / Sepidar ship as **reference profiles with placeholders**: they contain **no real
-> endpoint URLs and no guessed field names**. See [Verified vs. reference](#verified-vs-reference).
+[![Tests](https://github.com/sirdadfar/iran-accounting-connector/actions/workflows/tests.yml/badge.svg)](https://github.com/sirdadfar/iran-accounting-connector/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![PHP 8.1–8.3](https://img.shields.io/badge/php-8.1%E2%80%938.3-777bb4.svg)](composer.json)
 
-Persian documentation: [`README.fa.md`](README.fa.md)
+> **Honest status: this is a framework, not a certified vendor integration.** The generic JSON/HTTP
+> adapter is implemented and tested end-to-end against a fake HTTP client. Mahak, Holoo and Sepidar
+> ship only as **reference profiles with placeholders**: no real URLs and no guessed field names.
+> No test talks to a live accounting server. See [Limitations](#8-limitations-and-what-is-not-included).
 
----
-
-## 1. The business problem
-
-Iranian shops that sell online usually keep their accounting books in a desktop/server accounting
-product (Mahak, Holoo, Sepidar, ...). The shop owner pays a developer to connect the two. Market
-quotes for this integration are commonly **38M–82M Toman**, and most of that money is not spent on
-"calling an API". It is spent on the three things that actually break in production:
-
-1. **Mapping** — the shop says `billing.code`, the accounting system wants its own account/customer
-   field, nested under its own envelope. Every customer has a different shape.
-2. **Idempotency** — shops deliver orders through webhooks and cron jobs that retry. A naive
-   integration pushes the same invoice twice and the accountant has to delete a duplicate document
-   from the books.
-3. **Retries** — accounting servers are on-premise, restart at night, time out on big batches, and
-   return HTML error pages. Retrying a *validation* error forever is as harmful as not retrying a
-   timeout.
-
-This library packages those three concerns as first-class, tested components so a project starts at
-"fill in the mapping profile", not at "write a sync loop again".
+Persian documentation: [`README.fa.md`](README.fa.md) — Security policy: [`SECURITY.md`](SECURITY.md) —
+Integration guide (Persian): [`docs/integration-fa.md`](docs/integration-fa.md)
 
 ---
 
-## 2. Architecture
+## 1. What problem this project solves
 
-```
- shop (WooCommerce / custom app)
-        │  invoices, payments, customers
-        ▼
- ┌──────────────────────────────────────────────────────────────────┐
- │ Sync\InvoiceSyncer / Sync\PaymentSyncer                          │
- │  1. validate      (IR-VAL-*)  ──► Validation\ValidationResult     │
- │  2. map           (IR-MAP-*)  ──► Mapping\FieldMapper             │
- │  3. claim/check   (IR-IDEM-*) ──► Idempotency\IdempotencyStore    │
- │  4. push + retry              ──► ConnectorInterface              │
- │  5. record result             ──► Sync\SyncResult                 │
- └───────────────┬───────────────────────────────┬──────────────────┘
-                 │                               │
-                 ▼                               ▼
-      Retry\RetryPolicy                   Adapter layer
-      • exponential backoff               ├ GenericWebserviceAdapter  (implemented + tested)
-      • bounded jitter                    ├ MahakAdapter              (reference profile)
-      • retry only TransientFailure       ├ HolooAdapter              (reference profile)
-      • Retry\Sleeper (injectable)        ├ SepidarAdapter            (reference profile)
-                                          └ SqlServerAdapter          (experimental skeleton)
-                 │
-                 ▼
-        Http\Client  (PSR-18 style, 1 method)
-        ├ CurlClient   production transport (no retries of its own)
-        └ FakeClient   tests + demo, cannot reach the network
-```
+A shop records orders in WooCommerce or a custom app, while the books live in a separate desktop or
+server accounting product. The integration usually breaks in three places: **mapping** fields that
+have different names in every installation, **duplicate documents** caused by webhooks and cron jobs
+that retry, and **retrying** a timeout as if it were a validation error.
 
-Key rule: **the transport never retries.** `RetryPolicy` owns that decision so idempotency,
-attempt counting and logging stay in one place.
+This package turns those three concerns into separate, tested components so a project starts at
+"fill in the mapping profile" instead of "write the sync loop again".
 
----
+## 2. Features
 
-## 3. Requirements and installation
+**Domain and money**
 
-* PHP **>= 8.1** (developed and tested on 8.3.6; CI matrix covers 8.1 / 8.2 / 8.3)
-* `ext-json` (required), `ext-curl` (default transport), `ext-pdo` (durable idempotency store)
+* `Domain\Money`: amounts are always **integer Rial**; `add/subtract/multiply` detect 64-bit overflow
+  instead of silently falling back to `float`. Formatting supports Persian separators and optional
+  Persian digits.
+* `Domain\Invoice`, `InvoiceLine`, `Payment`, `Customer`, `Account`: immutable, strict-typed DTOs.
+  Line tax uses basis points (900 = 9%) and half-up rounding with integer arithmetic.
+
+**Validation**
+
+* `Validation\InvoiceValidator` / `PaymentValidator`: 1-Rial total tolerance, 10-digit national ID,
+  mobile, `IRR` currency, future dates, oversized discounts and arithmetic overflow (`IR-VAL-018`).
+* `Validation\ValidationError`: stable code, field, Persian + English message, and a diagnostic
+  `context`. National IDs and mobile numbers are masked in `context`.
+
+**Mapping**
+
+* `Mapping\FieldMapper`: dot-path sources/targets, defaults, required/optional fields, callable
+  `transform`, and `MappingProfile` for per-customer profiles.
+* `Support\JalaliDate`: dependency-free Gregorian ↔ Jalali conversion using the 33-year cycle, with a
+  round-trip test, for targets that require a Jalali date.
+
+**Idempotency**
+
+* `Idempotency\IdempotencyStore` implements **claim → complete/fail**. `ArrayIdempotencyStore` is for
+  tests/demos; `PdoIdempotencyStore` (SQLite/MySQL) is for production.
+* Deterministic key `provider:operation:sha256(externalId)`. A succeeded key is never reclaimed;
+  failed and stale keys are. Store errors **fail closed**.
+
+**Retries**
+
+* `Retry\RetryPolicy`: only `TransientFailure` is retried (5xx, 408, 425, 429, connection resets,
+  timeouts), with bounded exponential backoff, jitter and an injectable `Sleeper`.
+* `Retry-After` is honoured up to `maxDelayMs`; a larger value stops the retry instead of retrying
+  earlier than the server asked.
+* If the adapter cannot send an idempotency key, `OperationRunner` reduces the budget to one attempt
+  and returns warning `IR-IDEM-003`.
+
+**Adapters**
+
+* `Adapter\GenericWebserviceAdapter`: configurable JSON/HTTP endpoints, headers, success/duplicate
+  codes, path placeholders and an idempotency header. Absolute endpoint paths must stay on the same
+  origin as `base_uri`.
+* `Adapter\MahakAdapter`, `HolooAdapter`, `SepidarAdapter`: reference profiles with `__FILL_*__`
+  placeholders that refuse to construct until filled.
+* `Adapter\SqlServerAdapter`: experimental direct-database skeleton. Every write reports
+  `IR-ADP-003`; no table or column names are guessed.
+
+**Transport, observability and tests**
+
+* `Http\CurlClient`: TLS verification, no redirects, HTTP/HTTPS only, connect + total timeouts, no
+  internal retries. `Http\Request` strictly validates method, URL and headers.
+* `Support\Redactor`: removes tokens/passwords from exception messages, response previews and health
+  messages; masks PII.
+* `Sync\SyncResult::toLogArray()`: recommended log shape, without the customer-bearing `payload`.
+* `Testing\FakeClient`, `FakeSleeper`, `FrozenClock`; `bin/sync-demo.php` runs without network.
+
+## 3. Requirements
+
+| Requirement | Version/status |
+| --- | --- |
+| PHP | `>=8.1`; CI matrix covers **8.1 / 8.2 / 8.3 / 8.4** |
+| Composer | 2.x |
+| `ext-json` | Required (declared in `composer.json`) |
+| `ext-curl` | For `Http\CurlClient`; not needed by tests (`FakeClient`) |
+| `ext-pdo` | For `PdoIdempotencyStore`; SQLite or MySQL |
+| CI | 8.1 / 8.2 / 8.3 / 8.4 matrix configured in `.github/workflows/tests.yml` |
+
+PHP 8.4 is part of the CI matrix for this release. PHP 8.1 is the floor; older runtimes (7.x and 8.0)
+are not tested.
+
+## 4. Installation and setup
+
+### 4.1. Install from the repository (current state)
+
+The package is not published on Packagist yet, so
+`composer require sirdadfar/iran-accounting-connector` will not work without configuring a
+repository. Use a VCS install:
 
 ```bash
-COMPOSER_ALLOW_SUPERUSER=1 composer require sirdadfar/iran-accounting-connector
-# or, from a checkout:
-COMPOSER_ALLOW_SUPERUSER=1 composer install
+composer config repositories.iran-accounting-connector vcs https://github.com/sirdadfar/iran-accounting-connector
+composer require sirdadfar/iran-accounting-connector:dev-main
 ```
 
----
+No release tag exists, so `dev-main` is the only current reference. For production, pin a commit:
 
-## 4. Quick start (production code path)
+```bash
+composer require sirdadfar/iran-accounting-connector:dev-main#<commit-sha>
+```
+
+In CI/containers running as root, prefix commands with `COMPOSER_ALLOW_SUPERUSER=1`.
+
+### 4.2. Install from source for development
+
+```bash
+git clone https://github.com/sirdadfar/iran-accounting-connector.git
+cd iran-accounting-connector
+COMPOSER_ALLOW_SUPERUSER=1 composer install
+vendor/bin/phpunit
+php bin/sync-demo.php
+```
+
+`composer.lock` is not committed (this is a library); keep a lock file in your own environment for
+reproducible installs.
+
+### 4.3. First connection
+
+1. Create the idempotency table:
+
+```php
+use IranAccounting\Idempotency\PdoIdempotencyStore;
+
+$pdo = new PDO('sqlite:/var/lib/shop-sync/idempotency.sqlite');
+$store = new PdoIdempotencyStore($pdo);
+$store->migrate();
+```
+
+2. Create the configuration file described in [Configuration](#5-configuration), outside version
+   control.
+3. Send one invoice with `dryRun: true` and compare the body with the target's documentation.
+4. After verifying against a test company, run the worker as described in
+   [`docs/deployment-fa.md`](docs/deployment-fa.md) (Persian).
+
+## 5. Configuration
+
+### 5.1. Adapter-level keys
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `name` | `generic-webservice` | Adapter name; part of the idempotency key. Changing it starts a new namespace. |
+| `base_uri` | — (required) | Absolute `http(s)` base URL, without credentials/query/fragment. |
+| `headers` | `[]` | Headers sent with every request; RFC 7230 names, values without CR/LF/NUL. |
+| `endpoints` | `[]` | Endpoints; at least `invoice` is required. |
+| `mapping` | `[]` | Mapping profile per operation; empty falls back to the bundled generic contract. |
+| `mapping_defaults` | `[]` | Static initial values per operation (for example `Currency => IRR`). |
+| `success_codes` | `[200,201,202,204]` | Successful HTTP status codes. |
+| `duplicate_codes` | `[]` | Codes meaning "already accepted" (for example `409`). |
+| `timeout` | `10.0` | Total request timeout in seconds; must be finite and positive. |
+| `idempotency_header` | `Idempotency-Key` | Idempotency header name; an empty string means "do not send", which limits automatic retries. |
+| `idempotency_key_prefix` | `iac` | Prefix of the generated key value. |
+
+### 5.2. Per-endpoint keys
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `method` | `POST` | `GET/POST/PUT/PATCH/DELETE` |
+| `path` | — (required) | Relative path, or an absolute same-origin URL; placeholders: `{number}`, `{external_id}`, `{code}` |
+| `id_path` | `id` | Dot path to the remote id in the JSON response; `null` means use `external_id` |
+| `query` | `[]` | Query parameters; supply values **unencoded** |
+| `headers` | `[]` | Endpoint-specific headers |
+| `number_path` | `number` | Response dot path for the invoice number in `find_invoice` |
+| `status_path` | `status` | Response dot path for the invoice status in `find_invoice` |
+
+Known endpoint names: `invoice`, `payment`, `customer`, `find_invoice`, `health`.
+
+### 5.3. Example
 
 ```php
 <?php
-declare(strict_types=1);
+// config/erp.php — fictional; example.test is a reserved domain.
+return [
+    'name'     => 'shop-erp',
+    'base_uri' => 'https://erp.example.test/api/v1',
+    'headers'  => ['Authorization' => 'Bearer ' . getenv('ERP_TOKEN')],
+    'endpoints' => [
+        'invoice'      => ['method' => 'POST', 'path' => '/invoices',          'id_path' => 'data.id'],
+        'payment'      => ['method' => 'POST', 'path' => '/payments',          'id_path' => 'data.id'],
+        'customer'     => ['method' => 'PUT',  'path' => '/customers/{code}',  'id_path' => 'data.id'],
+        'find_invoice' => [
+            'method' => 'GET', 'path' => '/invoices/{number}', 'id_path' => 'data.id',
+            'number_path' => 'data.number', 'status_path' => 'data.status',
+        ],
+        'health'       => ['method' => 'GET', 'path' => '/health', 'id_path' => null],
+    ],
+    'mapping' => [
+        'invoice' => [
+            'number'          => 'Invoice.Number',
+            'external_id'     => 'Invoice.ExternalId',
+            'issued_at'       => ['target' => 'Invoice.Date', 'transform' => static fn (string $v): string => (new DateTimeImmutable($v))->format('Y-m-d')],
+            'customer.code'   => 'Partner.Code',
+            'customer.name'   => 'Partner.Name',
+            'lines'           => ['target' => 'Items', 'required' => true, 'transform' => $mapLines],
+            'tax'             => 'Totals.Vat',
+            'discount'        => 'Totals.Discount',
+            'total'           => 'Totals.Amount',
+        ],
+        'payment'  => [/* ... */],
+        'customer' => [/* ... */],
+    ],
+    'duplicate_codes'  => [409],
+    'mapping_defaults' => ['invoice' => ['Currency' => 'IRR']],
+];
+```
 
+Mapping syntax and Jalali conversion: [`docs/mapping-fa.md`](docs/mapping-fa.md) (Persian).
+
+## 6. Usage
+
+### 6.1. Build the components
+
+```php
 use IranAccounting\Adapter\GenericWebserviceAdapter;
 use IranAccounting\Http\CurlClient;
 use IranAccounting\Idempotency\PdoIdempotencyStore;
@@ -95,10 +238,8 @@ use IranAccounting\Sync\InvoiceSyncer;
 use IranAccounting\Sync\OperationRunner;
 use IranAccounting\Validation\InvoiceValidator;
 
-$pdo = new PDO('mysql:host=127.0.0.1;dbname=shop;charset=utf8mb4', $user, $password);
-
-$store = new PdoIdempotencyStore($pdo);   // table: iran_accounting_idempotency
-$store->migrate();                        // run once per deployment (or use the DDL in docs)
+$store = new PdoIdempotencyStore($pdo);
+$store->migrate();
 
 $adapter = new GenericWebserviceAdapter(new CurlClient(), require __DIR__ . '/config/erp.php');
 
@@ -109,239 +250,166 @@ $runner = new OperationRunner(
 );
 
 $syncer = new InvoiceSyncer($adapter, $runner, new InvoiceValidator());
+```
 
-// 1) Safe preview: validation + mapping + duplicate check, no network call, no writes.
+### 6.2. Dry-run, then push
+
+```php
+// 1) Validate + map + duplicate check; no network call and no writes.
 $preview = $syncer->sync($invoice, dryRun: true);
-// $preview->status === 'dry_run', $preview->payload === the exact JSON body that would be sent
+// $preview->status === SyncStatus::DryRun
+// $preview->payload === the exact body the real push would send
 
 // 2) Real push.
 $result = $syncer->sync($invoice);
 
 match ($result->status) {
-    SyncStatus::Success   => log_info('pushed', $result->remoteId),
-    SyncStatus::Duplicate => log_info('already synced, skipped'),
-    SyncStatus::Invalid   => quarantine($invoice, $result->errors),   // IR-VAL-* / IR-MAP-*
-    SyncStatus::Failed    => retry_later($invoice, $result->errors),  // IR-TRN-*, IR-DB-*, IR-SYNC-*
-    default               => null,
+    SyncStatus::Success   => $log->info('pushed', $result->toLogArray()),
+    SyncStatus::Duplicate => $log->info('already synced', $result->toLogArray()),
+    SyncStatus::Invalid   => quarantine($invoice, $result->errors),
+    SyncStatus::Failed    => requeue($invoice, $result->errors),
+    SyncStatus::DryRun    => reviewPayload($result->payload),
 };
 ```
 
-`SyncResult` carries `status`, `remoteId`, `attempts`, `delaysMs`, `errors[]`, `warnings[]` and the
-mapped `payload`, so the caller never has to re-derive why something happened.
+`SyncResult` exposes `status`, `operation`, `externalId`, `remoteId`, `attempts`, `delaysMs`,
+`errors[]`, `warnings[]`, `message` and `payload`. Use `toLogArray()` for logs to omit `payload`.
 
-### Adapter configuration
+### 6.3. Operation order
 
-```php
-// config/erp.php  — this example is fictional (example.test is a reserved domain)
-return [
-    'name'    => 'shop-erp',
-    'base_uri' => 'https://erp.example.test/api/v1',
-    'headers' => ['Authorization' => 'Bearer ' . getenv('ERP_TOKEN')],
-    'endpoints' => [
-        'invoice'      => ['method' => 'POST', 'path' => '/invoices',        'id_path' => 'data.id'],
-        'payment'      => ['method' => 'POST', 'path' => '/payments',        'id_path' => 'data.id'],
-        'customer'     => ['method' => 'PUT',  'path' => '/customers/{code}', 'id_path' => 'data.id'],
-        'find_invoice' => ['method' => 'GET',  'path' => '/invoices/{number}',
-                           'id_path' => 'data.id', 'number_path' => 'data.number', 'status_path' => 'data.status'],
-        'health'       => ['method' => 'GET',  'path' => '/health', 'id_path' => null],
-    ],
-    'mapping' => [
-        'invoice' => [
-            'number'          => 'Invoice.Number',
-            'external_id'     => 'Invoice.ExternalId',
-            'issued_at'       => ['target' => 'Invoice.Date', 'transform' => fn (string $v) => (new DateTimeImmutable($v))->format('Y-m-d')],
-            'customer.code'   => 'Partner.Code',
-            'customer.name'   => 'Partner.Name',
-            'customer.mobile' => ['target' => 'Partner.Mobile', 'required' => false],
-            'lines'           => ['target' => 'Items', 'required' => true, 'transform' => $mapLines],
-            'tax'             => 'Totals.Vat',
-            'discount'        => 'Totals.Discount',
-            'total'           => 'Totals.Amount',
-        ],
-        'payment'  => [ /* field map, same syntax */ ],
-        'customer' => [ /* field map, same syntax */ ],
-    ],
-    // optional
-    'success_codes'          => [200, 201, 202, 204],
-    'duplicate_codes'        => [409],          // remote already has this document -> status: duplicate
-    'idempotency_header'     => 'Idempotency-Key',
-    'idempotency_key_prefix' => 'iac',
-    'timeout'                => 10.0,
-    'mapping_defaults'       => ['invoice' => ['Currency' => 'IRR']],
-];
-```
+1. `upsertCustomer` (when the target requires an existing customer).
+2. `pushInvoice`.
+3. `pushPayment` after the invoice succeeds.
 
-Placeholders available in paths and query values: `{number}`, `{external_id}`, `{code}`.
-See [`docs/mapping-fa.md`](docs/mapping-fa.md) for mapping details.
+`InvoiceSyncer` and `PaymentSyncer` share the runner and store. The idempotency key includes the
+operation, so a payment retry cannot collide with an invoice retry.
 
----
+### 6.4. Behaviour you can rely on
 
-## 5. Domain model
+* Same `external_id` again → `Duplicate`, **client call count stays unchanged**.
+* Same id with a different payload → `Duplicate` + warning `IR-IDEM-002`.
+* Another worker owns the key → `Duplicate` + warning `IR-IDEM-001`, no push.
+* Store unavailable → `Failed` with `IR-DB-001`, nothing sent (fail closed).
+* Remote success but local `complete()` failure → `Failed` + explicit reconciliation warning and
+  `remoteId`.
+* Adapter without an idempotency header → one attempt only + warning `IR-IDEM-003`.
 
-Immutable, strict-typed DTOs. Money is **always an integer amount in Rial** — floats are rejected by
-strict types, and integer overflow is detected instead of silently degrading to `float`.
+### 6.5. Worker
 
-| Type | Purpose |
-| --- | --- |
-| `Money` | integer Rial; `add/subtract/multiply`, `fromToman()`, formatting (optional Persian digits) |
-| `Customer` | `code`, `name`, `nationalId`, `mobile`, `address`, `economicCode` |
-| `InvoiceLine` | `sku`, `name`, `quantity`, `unitPrice`, `discount`, `taxRateBasisPoints` (900 = 9%) |
-| `Invoice` | `number`, `externalId`, `issuedAt`, `customer`, `lines[]`, `tax`, `discount`, `total`, `currency`, `notes` |
-| `Payment` | `externalId`, `invoiceNumber`, `amount`, `paidAt`, `method`, `reference`, `accountCode` |
-| `Account` | chart-of-accounts entry (`code`, `title`, `type`, `currency`) |
+Do not run this library inside the shop's HTTP request. Queue the order and process it in a worker.
+Cron/systemd, lock TTL and reconciliation: [`docs/deployment-fa.md`](docs/deployment-fa.md) (Persian).
 
-Totals rule (tolerance **1 Rial** to absorb per-document rounding in the source system):
+## 7. Security
 
-```
-sum(line.unitPrice * qty - line.discount) + invoice.tax - invoice.discount  ≈  invoice.total
-```
+Summary of the design and trust model:
 
----
+* **Configuration is trusted operator input.** Never build `base_uri` or mapping profiles from user
+  input. Absolute endpoint paths must use the same scheme/host/port as `base_uri`, so configuration
+  cannot become an SSRF pivot.
+* **Transport:** certificate and hostname verification, no redirects, HTTP/HTTPS only, connect and
+  total timeouts, `CURLOPT_NOSIGNAL`. `CurlClient` never retries by itself.
+* **Input:** alphabetic method tokens, absolute URLs without credentials, RFC 7230 header names and
+  values without CR/LF/NUL (header injection is rejected), finite timeouts.
+* **Data:** JSON only; there is no XML/XXE parser and no `unserialize`.
+* **Idempotency:** atomic claim, fail-closed store errors, and retries disabled for POST adapters
+  that cannot send an idempotency key.
+* **Logging:** `Redactor` removes tokens/passwords from exception messages and response previews;
+  `responseBody` is raw and must not be logged; `toLogArray()` omits the payload; national ID/mobile
+  are masked in validation contexts.
+* **AuthN/AuthZ:** this is a library, not a service; access control belongs to your application.
+* **Network limits:** there is no built-in rate limiter or egress allowlist; enforce them in the
+  queue/network layer.
 
-## 6. Idempotency
+Supported versions and the private reporting path: [`SECURITY.md`](SECURITY.md).
 
-`Idempotency\IdempotencyStore` implements a **claim → complete/fail** protocol:
+## 8. Limitations and what is not included
 
-1. `reserve(key, ...)` atomically claims the key. A succeeded key can never be reclaimed; a failed or
-   abandoned (`pending` older than the lock TTL) key can be.
-2. The network call happens only after a successful claim.
-3. `complete(key, remoteId)` records success; `fail(key, error)` makes the record retryable.
+* **No live accounting server was tested.** No test talks to Mahak, Holoo, Sepidar or a real ERP.
+  Field names and URLs must be filled from the installed version's documentation and verified on a
+  test company.
+* **SOAP/XML is not implemented.** The generic adapter is JSON/HTTP; write a custom
+  `ConnectorInterface` for SOAP (the Runner/Retry/Store logic is reusable).
+* **`CurlClient` has no network integration test.** Request building, options and error
+  classification are reviewed, but TLS/proxy/timeouts must be verified against the target server.
+* **The MySQL DDL is only asserted as text.** Real execution is tested on in-memory SQLite.
+* **Cross-process concurrency** is enforced by the store protocol and exercised sequentially; a
+  multi-worker load test was not performed.
+* **11-digit legal-entity national IDs** are accepted as digits only; their checksum is not
+  implemented.
+* **Rial only (`IRR`).** Toman conversion must happen upstream; otherwise `IR-VAL-011`.
+* **No rate limiter, response-size cap or encryption at rest.** Provide these in your queue, proxy
+  and database.
+* **DNS rebinding** can only be mitigated with a network egress allowlist; origin checks compare
+  URLs, not resolved IPs.
+* **PHP 7.x and 8.0** are not supported; the floor is 8.1.
+* Accounting decisions (document-level vs line-level tax, round-off accounts) must be agreed with
+  the customer's accountant.
 
-The key is `provider:operation:sha256(externalId)` — bounded in size, deterministic, and the plain
-`external_id` is still stored for debugging.
-
-| Store | When to use |
-| --- | --- |
-| `ArrayIdempotencyStore` | tests, short-lived workers, demos |
-| `PdoIdempotencyStore` | production: SQLite (single server) or MySQL (shared) |
-
-Semantics that the tests pin down:
-
-* Second push with the same `external_id` → status `duplicate`, **client call count stays 1**.
-* Same `external_id` with a **different payload** → still `duplicate`, plus warning `IR-IDEM-002`.
-* Another worker currently owns the key → `duplicate` + warning `IR-IDEM-001`, no push.
-* Idempotency store unavailable → **fail closed**: status `failed` with `IR-DB-001`, nothing is sent.
-* Remote push succeeded but the local `complete()` failed → status `failed` + an explicit
-  "reconcile manually" warning, because that is the one case where a retry could duplicate a document.
-
-DDL is generated by `PdoIdempotencyStore::schemaSql('sqlite'|'mysql')`, or applied with
-`migrate()`. **Verified on SQLite in memory; the MySQL DDL is only asserted as text.**
-
----
-
-## 7. Retry policy
-
-* Only exceptions implementing `Exception\TransientFailure` are retried: HTTP 5xx, 408, 425, 429,
-  connection resets, timeouts.
-* Validation errors, mapping errors, configuration errors and HTTP 4xx fail **immediately**.
-* Backoff: `min(maxDelay, base * 2^(attempt-1))` plus bounded jitter (`±jitterRatio`).
-* Sleeping goes through `Retry\Sleeper`, so tests inject `FakeSleeper` and assert exact delays
-  (`[100, 200]`) without waiting.
-* After the budget is exhausted, `RetryExhaustedException` carries `attempts`, `delaysMs` and the
-  last failure, which the runner turns into `SyncResult::$attempts` / `$delaysMs`.
-
----
-
-## 8. Error codes
-
-Codes are stable; messages are bilingual. Full table: [`docs/errors-fa.md`](docs/errors-fa.md).
-
-| Prefix | Area | Examples |
-| --- | --- | --- |
-| `IR-VAL-*` | document validation | `IR-VAL-003` total mismatch, `IR-VAL-004` non-positive quantity, `IR-VAL-002` missing customer code |
-| `IR-MAP-*` | field mapping | `IR-MAP-001` required source field missing, `IR-MAP-002` transform failed |
-| `IR-CFG-*` | adapter configuration | `IR-CFG-001` bad `base_uri`, `IR-CFG-002` missing endpoint, `IR-CFG-003` operation not configured |
-| `IR-ADP-*` | protocol/response | `IR-ADP-001` invalid JSON, `IR-ADP-002` remote id not found in response |
-| `IR-TRN-*` | transport | `IR-TRN-001` transient (retryable), `IR-TRN-002` permanent rejection |
-| `IR-IDEM-*`, `IR-SYNC-*`, `IR-DB-*` | sync+idempotency | `IR-IDEM-001` in flight, `IR-IDEM-002` payload changed, `IR-DB-001` store unavailable |
-
-Every `ValidationError` exposes `code`, `field`, `message_fa`, `message_en` and a `context` array.
-
----
-
-## 9. Reference profiles (Mahak / Holoo / Sepidar) and the SQL Server skeleton
-
-Mahak, Holoo and Sepidar **do not publish one stable, public, version-independent HTTP contract**
-that can be shipped as a library default: installations differ by version, licensing, add-ons and
-on-premise setup. Inventing field names would produce a library that *looks* integrated and silently
-writes wrong data into accounting books.
-
-So these three adapters are **thin subclasses of the tested generic adapter**, and they ship only:
-
-* `PROFILE` (a name — this **is** the idempotency namespace),
-* `endpointTemplate()` — every path is `__FILL_...__`, no URL is asserted,
-* `mappingTemplate()` — every target is `__FILL_...__`, no vendor field name is asserted,
-* `configTemplate()` — copy, fill, keep out of version control.
-
-**The constructor refuses to start while placeholders remain** (`IR-CFG-001/002/004`). That is
-deliberate: failing loudly is better than writing guessed data into an accounting system.
-
-`Adapter\SqlServerAdapter` is an **experimental skeleton** for direct-database integrations
-(common for older Holoo/Sepidar installations): it can run `SELECT 1` for connectivity, reports all
-write capabilities as `false`, and every write/list method throws `IR-ADP-003`. It contains no table
-or column names.
-
----
-
-## 10. Verified vs. reference
-
-### Verified in this repository (unit tests, no network)
-
-| Area | Evidence |
-| --- | --- |
-| Money arithmetic, no float drift, overflow detection | `MoneyTest` (16 tests) |
-| Invoice/payment validation and Persian codes | `InvoiceValidationTest` |
-| Field mapping: dot paths, defaults, callables, required, failures | `FieldMapperTest` |
-| Idempotency semantics (in-memory) | `ArrayIdempotencyStoreTest` |
-| Idempotency DDL + dedupe on **SQLite in memory** | `PdoIdempotencyStoreTest` |
-| Retry: 2 failures → success = 3 attempts, 400 = no retry, backoff `[100, 200]` | `RetryPolicyTest` |
-| Synchronizer: success, duplicate, dry-run, invalid, retry, fail-closed store | `InvoiceSyncerTest` |
-| Generic adapter request shape (method/URL/headers/body), response handling, config errors | `GenericWebserviceAdapterTest` |
-| Reference profiles: subclassing, placeholders, refusal to run unfilled | `ReferenceProfileTest` |
-| `bin/sync-demo.php` actually runs and prints Persian output | `SyncDemoTest` (spawns the CLI) |
-
-Current suite: **116 tests, 527 assertions**, green on PHP 8.3.6.
-
-### NOT verified — treat as integrator work
-
-* **No live accounting server was available.** No test talks to Mahak, Holoo, Sepidar or any real ERP.
-* **Mahak/Holoo/Sepidar field names and endpoints are unknown by design** — the placeholders must be
-  filled from the installed version's API/SOAP/WSDL docs and confirmed against a test company.
-* **`CurlClient` is not covered by an integration test** (no network in tests). Its request building
-  and error classification are code-reviewed, not proven. Verify TLS, proxies and timeouts on the
-  target server.
-* **MySQL execution of the DDL** was not run; only the generated SQL text was asserted.
-* **SOAP/XML endpoints are not implemented** — the generic adapter speaks JSON over HTTP.
-* **Cross-process concurrency** is enforced by the store protocol and exercised sequentially; a true
-  multi-worker race was not load-tested.
-* **11-digit legal-entity IDs** (شناسه ملی) are accepted as digits only; their checksum algorithm is
-  not asserted. Only the 10-digit national ID checksum is implemented.
-* **Toman handling**: amounts are Rial-only. Currency must be `IRR`; anything else is rejected with
-  `IR-VAL-011`. Convert Toman upstream.
-* **CI matrix 8.1/8.2/8.3** is configured in `.github/workflows/tests.yml` but was executed locally
-  only on 8.3.6.
-* Discounts, tax and rounding rules are configurable *in mapping*, but the accounting-correct
-  treatment (document-level vs line-level tax, round-off accounts) must be agreed with the customer's
-  accountant.
-
----
-
-## 11. Tests and demo
+## 9. Development and tests
 
 ```bash
 COMPOSER_ALLOW_SUPERUSER=1 composer install
-vendor/bin/phpunit                       # unit suite, no network
-php bin/sync-demo.php                    # dry-run, success, duplicate, retry, invalid, health
+vendor/bin/phpunit                 # no network
+composer validate --strict
+composer audit
+php -l src/Support/Redactor.php    # example; run on every touched file
+php bin/sync-demo.php
 ```
 
-The demo uses `FakeClient` and a frozen clock, and prints a Persian summary. It is intentionally not
-a "live" demo because no live server exists.
+Actual suite status in this release: **205 tests, 1423 assertions**, green on PHP 8.3.6. Tests use
+`FakeClient` and cannot reach the network.
 
-Deployment notes (cron worker, lock TTL, monitoring, reconciliation):
-[`docs/deployment-fa.md`](docs/deployment-fa.md) (Persian).
+Adding a feature:
 
----
+1. Implement `ConnectorInterface` (and `PayloadProvider` if needed) for a new adapter; do not
+   duplicate the sync logic.
+2. Write a test in `tests/Unit` for runner/retry behaviour first; inject time and sleeping
+   (`FakeSleeper`, `FrozenClock`).
+3. Add new error codes to `Validation\ErrorCodes` and `docs/errors-fa.md`; never change existing
+   codes.
+4. Before submitting, run `composer validate --strict`, `composer audit` and the full suite.
 
-## 12. License
+CI: `.github/workflows/tests.yml` runs on PHP 8.1/8.2/8.3, lints every PHP file, runs the suite, the
+demo and `composer audit`.
 
-MIT © 2026 sirdadfar. See [`LICENSE`](LICENSE).
+## 10. Project structure
+
+```text
+iran-accounting-connector/
+├── src/
+│   ├── Adapter/            GenericWebserviceAdapter, reference profiles, SqlServerAdapter
+│   ├── Domain/             Money, Invoice, InvoiceLine, Payment, Customer, Account, AccountType
+│   ├── Exception/          connector, transport, HTTP and RetryExhausted exceptions
+│   ├── Http/               Client, Request, Response, CurlClient, HealthStatus, PushReceipt
+│   ├── Idempotency/        store interface, Array/Pdo stores, record/status/key
+│   ├── Mapping/            FieldMapper, MappingProfile and mapping exceptions
+│   ├── Retry/              RetryPolicy, RetryOutcome, Sleeper
+│   ├── Support/            Redactor, JalaliDate, PersianText, Json, DotPath, Clock
+│   ├── Sync/               OperationRunner, Invoice/PaymentSyncer, SyncResult/SyncStatus
+│   ├── Testing/            FakeClient, FakeSleeper, FrozenClock
+│   └── Validation/         validators, ValidationError/Result, ErrorCodes
+├── tests/Unit/             network-free unit tests
+├── bin/sync-demo.php       CLI demo using FakeClient
+├── docs/                   mapping, errors, deployment, integration (Persian)
+├── SECURITY.md             security policy and trust model
+├── CHANGELOG.md            SemVer history
+└── composer.json           PSR-4, dependencies, scripts
+```
+
+## 11. License and commercial use
+
+**MIT** licence; see [`LICENSE`](LICENSE). Commercial use, modification and redistribution are
+permitted provided the licence text is retained. The software is provided "as is", without warranty;
+responsibility for the correctness of accounting records remains with the integrator/customer. There
+are no runtime dependencies beyond PHP and `ext-json`.
+
+## 12. Support
+
+* **Bugs / feature requests:** <https://github.com/sirdadfar/iran-accounting-connector/issues>
+* **Security vulnerabilities:** use GitHub Security Advisories
+  (<https://github.com/sirdadfar/iran-accounting-connector/security/advisories/new>), not a public
+  issue. See [`SECURITY.md`](SECURITY.md).
+* **Response:** this is a portfolio project with no SLA. A realistic expectation is an initial reply
+  within about one week and an assessment within about one month.
+* Include the PHP version, package version, affected file/class, reproduction steps and
+  `toLogArray()` output (without payload or secrets) in the report.
